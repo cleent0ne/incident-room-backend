@@ -1,0 +1,43 @@
+app:
+  cookie:
+    secure: true       # cookies never sent over plain HTTP in production
+
+# Swagger UI / OpenAPI JSON are permitAll in SecurityConfig (a JSON API has no other way to expose
+# API docs to legitimate frontend/tooling consumers pre-auth), which means anyone who finds the URL
+# gets the full API surface. Fine for local/staging; not something a production deployment should
+# serve publicly by default. Disabling the springdoc endpoints here means /docs, /api-docs, and
+# /swagger-ui/** simply 404 in prod — re-enable deliberately (or put them behind another layer,
+# e.g. an IP allowlist at the LB) if prod API docs are actually wanted.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+server:
+  # Tell Tomcat to process X-Forwarded-For/X-Forwarded-Proto via its built-in RemoteIp valve.
+  # 'native' means Tomcat handles it internally (as opposed to Spring's ForwardedHeaderFilter).
+  # Critically, Tomcat ONLY accepts these headers if the request arrived from an IP that matches
+  # internal-proxies; a direct caller spoofing the header is silently ignored.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      # Matches all RFC-1918 private CIDRs — the range a Render / Railway / Fly.io load balancer
+      # will sit in. Tighten to the exact LB subnet once you know the specific hosting CIDR.
+      internal-proxies: >-
+        10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.1[6-9]\.\d{1,3}\.\d{1,3}|
+        172\.2\d\.\d{1,3}\.\d{1,3}|172\.3[01]\.\d{1,3}\.\d{1,3}|
+        192\.168\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1
+      # If the load balancer has a public (non-RFC-1918) IP, set TRUSTED_PROXY_IPS in the
+      # environment to a pipe-separated regex of that IP (e.g. '34\.123\.45\.67').
+      trusted-proxies: ${TRUSTED_PROXY_IPS:}
+
+logging:
+  level:
+    root: WARN
+    com.incidentroom: INFO
+  # JSON structured logging in prod — see logback-spring.xml, which switches encoders based on active profile
+
+# Fail-fast intent: app.jwt.secret has no default here. If JWT_SECRET is not set in the environment,
+# property placeholder resolution fails at startup rather than silently booting with a weak/shared secret.
+app-email-provider: transactional

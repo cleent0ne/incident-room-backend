@@ -1,0 +1,122 @@
+slug: bad-deploy-error-spike
+title: "Errors spike right after a deploy"
+difficulty: easy
+root_cause_class: bad-deploy
+symptom_summary: "The API's 500 error rate jumped from under 0.1% to 18% at 09:14 UTC, right as a deploy finished rolling out."
+duration_target_seconds: 300
+
+seo:
+  meta_title: "Bad Deploy Error Spike — Incident Room"
+  meta_description: "A straightforward bad-deploy incident: error rate spikes immediately after a release finishes rolling out. Practice reading the signal and rolling back."
+  og_image_path: "/og/bad-deploy-error-spike.png"
+
+topology:
+  nodes:
+    - { id: api-gateway, type: service, label: "API Gateway" }
+    - { id: orders-api,  type: service, label: "Orders API" }
+    - { id: postgres-db, type: database, label: "Postgres (orders)" }
+  edges:
+    - { from: api-gateway, to: orders-api }
+    - { from: orders-api, to: postgres-db }
+
+actions:
+  investigate:
+    - key: check_error_rate_timeline
+      label: "Check the error rate timeline"
+      description: "Look at the error rate graph over the last hour to pinpoint when it started."
+      cost_seconds: 20
+    - key: check_deploy_history
+      label: "Check deploy history"
+      description: "Look at recent deploys to orders-api and their timestamps."
+      cost_seconds: 20
+    - key: check_error_logs
+      label: "Read the error logs"
+      description: "Look at a sample of the actual 500 error stack traces."
+      cost_seconds: 40
+    - key: check_db_health
+      label: "Check Postgres health"
+      description: "Rule out the database as a contributing factor."
+      cost_seconds: 40
+  remediate:
+    - key: rollback_deploy
+      label: "Roll back the deploy"
+      description: "Revert orders-api to the previous known-good release."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The error spike began at the exact moment the new release finished rolling out, and the logs show a NullPointerException in code introduced by that release. Rolling back removes the bad code immediately, which is the fastest safe path to recovery — a proper fix can follow at normal pace once the incident is over."
+    - key: restart_orders_api
+      label: "Restart the Orders API pods"
+      description: "Roll the deployment to restart all pods."
+      correctness: incorrect
+      score_points: 0
+      explanation: "The new pods would just come back up running the same broken code. A restart does nothing here — the problem is the code itself, not process or connection state."
+    - key: scale_up_orders_api
+      label: "Add more Orders API replicas"
+      description: "Increase the replica count to handle the error load."
+      correctness: incorrect
+      score_points: 0
+      explanation: "Adding replicas increases capacity for good requests, but every replica is running the same broken release — more replicas just means more instances throwing the same error."
+    - key: fail_over_database
+      label: "Fail over to the database replica"
+      description: "Promote the read replica to primary and redirect traffic."
+      correctness: harmful
+      score_points: -20
+      explanation: "The database isn't implicated at all here — the error is a null pointer in application code. Failing over introduces real risk (replication lag, split-brain) to fix a problem that has nothing to do with the database."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: api-gateway
+    payload: { name: "error_rate_pct", value: 18.4 }
+  - t: 5
+    type: metric_point
+    source: api-gateway
+    revealed_by: check_error_rate_timeline
+    payload: { name: "error_rate_pct_at_09_10", value: 0.08 }
+  - t: 5
+    type: metric_point
+    source: api-gateway
+    revealed_by: check_error_rate_timeline
+    payload: { name: "error_rate_pct_at_09_14", value: 17.9, note: "Step change, not a gradual climb." }
+  - t: 10
+    type: log
+    source: orders-api
+    revealed_by: check_deploy_history
+    payload: { message: "Deploy orders-api v2.41.0 completed rollout at 09:14:02 UTC." }
+  - t: 15
+    type: log
+    source: orders-api
+    revealed_by: check_error_logs
+    payload: { level: "ERROR", message: "java.lang.NullPointerException at OrderPricingService.applyDiscount(OrderPricingService.java:88)" }
+  - t: 20
+    type: metric_point
+    source: postgres-db
+    revealed_by: check_db_health
+    payload: { name: "active_connections", value: 42, name_2: "query_p99_ms", value_2: 12 }
+
+postmortem: |
+  ## What happened
+
+  At 09:14 UTC, `orders-api` version `2.41.0` finished its rolling deploy. Within seconds, the
+  error rate jumped from a baseline of under 0.1% to 18%, and stayed there.
+
+  ## Why it happened
+
+  The new release introduced a code path in `OrderPricingService.applyDiscount()` that assumed a
+  `promotion` field would always be present on an order, and dereferenced it without a null check.
+  A meaningful fraction of real orders don't have an active promotion, so this threw a
+  `NullPointerException` on any such order — which was most of them.
+
+  ## The fix
+
+  The deploy was rolled back to `2.40.x` immediately, which restored the error rate to baseline
+  within about a minute. The actual code fix — a null check before accessing `promotion` — was
+  written, reviewed, covered by a regression test for the no-promotion case, and deployed separately
+  once the incident was over, at normal release pace rather than under time pressure.
+
+  ## Lesson
+
+  The timeline is usually the fastest diagnostic tool available: a hard step-change in error rate
+  that lines up exactly with a deploy completing is about as strong a signal as incident response
+  gets. When that signal is present, confirm it (don't skip straight to acting on a hunch) and then
+  roll back first — a proper fix can follow once the bleeding has stopped.

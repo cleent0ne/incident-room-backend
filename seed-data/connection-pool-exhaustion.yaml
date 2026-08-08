@@ -1,0 +1,152 @@
+slug: connection-pool-exhaustion
+title: "Everything is slow, but nothing looks broken"
+difficulty: hard
+root_cause_class: connection-pool-exhaustion
+symptom_summary: "Every endpoint on the Orders API has gotten slower over the last 30 minutes — no errors, no single obviously-broken dependency, just creeping latency everywhere."
+duration_target_seconds: 900
+
+seo:
+  meta_title: "Connection Pool Exhaustion — Incident Room"
+  meta_description: "A hard incident with no obvious culprit: a slow third-party dependency quietly exhausts a shared HTTP connection pool, degrading every unrelated endpoint."
+  og_image_path: "/og/connection-pool-exhaustion.png"
+
+topology:
+  nodes:
+    - { id: orders-api,      type: service, label: "Orders API" }
+    - { id: shared-http-pool, type: component, label: "Shared HTTP client pool" }
+    - { id: payments-api,    type: service, label: "Payments API (internal)" }
+    - { id: tax-calc-vendor, type: external, label: "Tax Calculation Vendor (3rd party)" }
+    - { id: postgres-db,     type: database, label: "Postgres (orders)" }
+  edges:
+    - { from: orders-api, to: shared-http-pool }
+    - { from: shared-http-pool, to: payments-api }
+    - { from: shared-http-pool, to: tax-calc-vendor }
+    - { from: orders-api, to: postgres-db }
+
+actions:
+  investigate:
+    - key: check_overall_latency
+      label: "Check overall API latency"
+      description: "Confirm which endpoints are affected and by how much."
+      cost_seconds: 30
+    - key: check_db_query_latency
+      label: "Check Postgres query latency"
+      description: "Rule the database in or out as the bottleneck."
+      cost_seconds: 60
+    - key: check_http_pool_metrics
+      label: "Check the shared HTTP client pool metrics"
+      description: "Look at active/idle/pending connection counts for the shared outbound HTTP pool."
+      cost_seconds: 90
+    - key: check_payments_api_latency
+      label: "Check Payments API latency"
+      description: "Look at response times for calls to the internal Payments API."
+      cost_seconds: 60
+    - key: check_tax_vendor_latency
+      label: "Check Tax Calculation Vendor latency"
+      description: "Look at response times for calls to the third-party tax calculation service."
+      cost_seconds: 90
+    - key: check_recent_config_changes
+      label: "Check recent configuration changes"
+      description: "Look for any recent changes to timeout or pool-size configuration."
+      cost_seconds: 60
+  remediate:
+    - key: add_timeout_to_tax_vendor_calls
+      label: "Add a strict timeout to Tax Calculation Vendor calls"
+      description: "Cap outbound calls to the tax vendor at a short timeout, separate from the shared pool's default."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The tax vendor's p99 latency crept up to several seconds with no timeout enforced on those specific calls, so those requests held onto shared HTTP pool connections for far longer than normal. Every other endpoint that also borrows from that same shared pool — including Payments calls that have nothing to do with tax — was starved waiting for a connection. A strict, short timeout on the vendor calls specifically stops them from monopolizing the shared pool, without needing to touch anything else."
+    - key: increase_shared_pool_size
+      label: "Increase the shared HTTP pool's max size"
+      description: "Raise the connection pool limit so more requests can be in flight at once."
+      correctness: partially_correct
+      score_points: 40
+      explanation: "This buys headroom and would reduce the symptom for a while, but it doesn't fix the underlying issue — slow tax-vendor calls would still hold connections far longer than they should, and the pool would eventually saturate again at a higher traffic level."
+    - key: restart_orders_api
+      label: "Restart the Orders API pods"
+      description: "Roll the deployment to clear connection pool state."
+      correctness: partially_correct
+      score_points: 20
+      explanation: "This clears the immediately-stuck connections and provides brief relief, but as soon as traffic resumes and the tax vendor is still slow, the pool starts filling up again the same way — it's a temporary reset, not a fix."
+    - key: fail_over_database
+      label: "Fail over to the database replica"
+      description: "Promote the read replica to primary and redirect traffic."
+      correctness: harmful
+      score_points: -20
+      explanation: "Postgres query latency is normal throughout this incident — the database was never the bottleneck. Failing over introduces real risk for no benefit and doesn't touch the actual cause."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: orders-api
+    payload: { name: "p99_latency_ms_all_endpoints", value: 4100 }
+  - t: 5
+    type: metric_point
+    source: orders-api
+    revealed_by: check_overall_latency
+    payload: { note: "Latency is elevated on every endpoint, including ones that don't touch tax calculation at all." }
+  - t: 10
+    type: metric_point
+    source: postgres-db
+    revealed_by: check_db_query_latency
+    payload: { name: "query_p99_ms", value: 14, note: "Normal — Postgres is not the bottleneck." }
+  - t: 15
+    type: metric_point
+    source: shared-http-pool
+    revealed_by: check_http_pool_metrics
+    payload: { name: "active_connections", value: 98, name_2: "pool_max", value_2: 100, name_3: "pending_requests", value_3: 340 }
+  - t: 20
+    type: metric_point
+    source: payments-api
+    revealed_by: check_payments_api_latency
+    payload: { name: "p99_latency_ms", value: 210, note: "Payments API itself responds normally once a connection is actually available." }
+  - t: 25
+    type: metric_point
+    source: tax-calc-vendor
+    revealed_by: check_tax_vendor_latency
+    payload: { name: "p99_latency_ms", value: 6200, name_2: "p99_latency_ms_last_week", value_2: 180 }
+  - t: 30
+    type: log
+    source: orders-api
+    revealed_by: check_recent_config_changes
+    payload: { message: "No config changes to orders-api in the last 14 days. Shared HTTP client has no per-destination timeout configured — a single global default of 30s applies to all outbound calls." }
+
+postmortem: |
+  ## What happened
+
+  Starting roughly 30 minutes before the on-call engineer got paged, latency crept up across every
+  endpoint of the Orders API — not just the ones that call the tax calculation vendor. There were no
+  errors, no obviously-broken dependency, and the database was never under unusual load.
+
+  ## Why it happened
+
+  Orders API uses a single shared HTTP connection pool (max 100 connections) for *all* outbound
+  calls — to the internal Payments API and to the third-party Tax Calculation Vendor alike — with one
+  global 30-second timeout and no per-destination override.
+
+  The tax vendor's own p99 latency degraded from its normal ~180ms to over 6 seconds (a problem on
+  their end, outside this system). Nothing in Orders API enforced a tighter timeout for those calls
+  specifically, so each one held a connection from the shared pool for up to 6+ seconds instead of
+  the usual sub-200ms. As tax-calculation traffic continued at its normal rate, connections got tied
+  up faster than they were freed, and the shared pool filled up.
+
+  Once the pool was saturated, *every* outbound call — including calls to Payments, which had nothing
+  to do with tax and were responding normally the whole time — had to queue for a connection. That
+  queuing is what made every endpoint slow, not just the ones actually talking to the vendor.
+
+  ## The fix
+
+  A short, strict timeout (800ms) was added specifically for calls to the Tax Calculation Vendor,
+  independent of the shared pool's global default. A slow or failing vendor call now fails fast and
+  releases its connection quickly instead of holding it for up to 30 seconds. As a longer-term
+  follow-up (not required to resolve this incident), giving the tax vendor its own dedicated
+  connection pool — rather than sharing one with unrelated internal calls — is tracked separately, so
+  a future slowdown in one dependency can't degrade every other endpoint through pool contention.
+
+  ## Lesson
+
+  A shared resource pool means a slowdown in one, even unrelated, consumer of that pool can degrade
+  every other consumer. When "everything is a little slow and nothing is clearly broken" is the
+  symptom, a shared pool or shared resource is a strong first place to look — the actual culprit is
+  often not the endpoint that looks slow, but something quietly starving a resource that endpoint
+  depends on indirectly.

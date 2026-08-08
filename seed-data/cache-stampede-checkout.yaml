@@ -1,0 +1,147 @@
+slug: cache-stampede-checkout
+title: "Checkout latency spike"
+difficulty: medium
+root_cause_class: cache-stampede
+symptom_summary: "Checkout p99 latency has climbed from ~120ms to over 2.4s since 14:02 UTC, and it's still rising."
+duration_target_seconds: 600
+
+seo:
+  meta_title: "Checkout Latency Spike — Incident Room"
+  meta_description: "A cache-stampede incident: checkout latency spikes after a popular cache key expires and every request piles onto the database at once."
+  og_image_path: "/og/cache-stampede-checkout.png"
+
+topology:
+  nodes:
+    - { id: web-frontend,  type: service, label: "Web Frontend" }
+    - { id: checkout-api,  type: service, label: "Checkout API" }
+    - { id: redis-cache,   type: cache,   label: "Redis (product cache)" }
+    - { id: postgres-db,   type: database, label: "Postgres (orders)" }
+  edges:
+    - { from: web-frontend, to: checkout-api }
+    - { from: checkout-api, to: redis-cache }
+    - { from: checkout-api, to: postgres-db }
+
+actions:
+  investigate:
+    - key: check_checkout_dashboard
+      label: "Check the Checkout API dashboard"
+      description: "Look at request rate, latency, and error rate for the Checkout API."
+      cost_seconds: 30
+    - key: check_redis_metrics
+      label: "Check Redis metrics"
+      description: "Look at Redis hit rate, eviction rate, and connection count."
+      cost_seconds: 60
+    - key: check_postgres_load
+      label: "Check Postgres load"
+      description: "Look at active connections and query latency on the orders database."
+      cost_seconds: 60
+    - key: check_recent_deploys
+      label: "Check recent deploys"
+      description: "Look for any deploys to checkout-api or its cache configuration in the last hour."
+      cost_seconds: 45
+    - key: check_cache_key_ttls
+      label: "Inspect cache key TTLs"
+      description: "Look at the TTL configuration for the product-pricing cache keys."
+      cost_seconds: 90
+  remediate:
+    - key: add_cache_jitter
+      label: "Add TTL jitter to cache writes"
+      description: "Randomize cache TTLs by ±10% so keys don't all expire at the same instant."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. A single high-traffic cache key expired and every concurrent request missed the cache at once, all falling through to Postgres simultaneously (a stampede). Jittering TTLs spreads expirations out so a cache miss doesn't happen for every in-flight request at once."
+    - key: scale_up_postgres
+      label: "Scale up the Postgres instance"
+      description: "Increase the database instance size to handle the extra load."
+      correctness: partially_correct
+      score_points: 40
+      explanation: "This would reduce the symptom's severity but doesn't address the cause — the next popular key to expire would trigger the same stampede again, just against a bigger (and more expensive) database."
+    - key: restart_checkout_api
+      label: "Restart the Checkout API pods"
+      description: "Roll the Checkout API deployment to clear any bad in-memory state."
+      correctness: incorrect
+      score_points: 0
+      explanation: "There's no bad in-memory state here — the cache and database are external to the API pods. A restart briefly interrupts traffic and does nothing to prevent the stampede from recurring."
+    - key: disable_redis_cache
+      label: "Disable the Redis cache entirely"
+      description: "Route all product-pricing reads directly to Postgres, bypassing the cache."
+      correctness: harmful
+      score_points: -20
+      explanation: "This removes the caching layer that Postgres depends on to handle normal load, not just the spike — every request now hits the database directly, which would cause a far worse and sustained outage rather than a resolved incident."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: checkout-api
+    payload: { name: "p99_latency_ms", value: 2400 }
+  - t: 0
+    type: metric_point
+    source: checkout-api
+    payload: { name: "error_rate_pct", value: 3.1 }
+  - t: 5
+    type: log
+    source: checkout-api
+    revealed_by: check_checkout_dashboard
+    payload: { level: "WARN", message: "Elevated response times on GET /checkout/pricing" }
+  - t: 10
+    type: metric_point
+    source: redis-cache
+    revealed_by: check_redis_metrics
+    payload: { name: "hit_rate_pct", value: 41.2 }
+  - t: 10
+    type: metric_point
+    source: redis-cache
+    revealed_by: check_redis_metrics
+    payload: { name: "connected_clients", value: 1840 }
+  - t: 15
+    type: metric_point
+    source: postgres-db
+    revealed_by: check_postgres_load
+    payload: { name: "active_connections", value: 480, max_connections: 500 }
+  - t: 15
+    type: log
+    source: postgres-db
+    revealed_by: check_postgres_load
+    payload: { level: "ERROR", message: "FATAL: too many connections for role \"checkout_api\"" }
+  - t: 20
+    type: log
+    source: checkout-api
+    revealed_by: check_recent_deploys
+    payload: { message: "No deploys to checkout-api in the last 6 hours." }
+  - t: 25
+    type: trace_span
+    source: redis-cache
+    revealed_by: check_cache_key_ttls
+    payload: { key: "product:pricing:*", ttl_seconds: 300, jitter: false, note: "All product-pricing keys share a fixed 300s TTL with no jitter." }
+
+postmortem: |
+  ## What happened
+
+  At 14:02 UTC, the Redis cache entry for `product:pricing:*` — a small set of keys covering the
+  site's best-selling products — expired simultaneously across all of them, because every write to
+  those keys used the exact same fixed TTL with no jitter.
+
+  Checkout traffic at that moment was near its daily peak. Every in-flight request that needed
+  pricing data missed the cache at once and fell through to Postgres to recompute it, all within the
+  same few hundred milliseconds. Postgres connection pool usage jumped from its normal ~80 connections
+  to the configured maximum of 500, and new connection attempts began failing outright.
+
+  ## Why it happened
+
+  The pricing cache-population code set a flat `ttl_seconds: 300` on every write, with no
+  randomization. Under low traffic this is harmless — expirations are spread out naturally by request
+  timing. Under peak traffic, with a handful of keys serving a disproportionate share of requests,
+  a flat TTL means every one of those keys expires in lockstep, and every concurrent request for that
+  key becomes a coordinated stampede against the origin store the moment it does.
+
+  ## The fix
+
+  TTLs on cache writes now include ±10% random jitter, so even keys written in the same batch expire
+  at different times. A secondary improvement — request coalescing (only one in-flight request per
+  key is allowed to actually query Postgres on a miss; the rest wait for its result) — is tracked as
+  a longer-term follow-up but wasn't necessary to resolve this incident.
+
+  ## Lesson
+
+  A cache is only as safe as its expiration policy. A fixed TTL on a hot key isn't a caching
+  optimization at that point — it's a scheduled outage waiting for a busy enough moment.

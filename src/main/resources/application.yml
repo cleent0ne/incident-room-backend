@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: incident-room-backend
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/incidentroom}
+      auto-index-creation: true
+
+server:
+  shutdown: graceful
+  error:
+    include-message: never   # never leak internal exception messages to clients — GlobalExceptionHandler owns response shape
+    include-stacktrace: never
+
+app:
+  frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  cookie:
+    domain: ${COOKIE_DOMAIN:localhost}
+    secure: ${COOKIE_SECURE:true}     # true in prod (HTTPS-only); overridden in application-prod.yml
+  jwt:
+    # Deliberately NO default here — a missing JWT_SECRET must fail startup rather than boot with
+    # a weak/shared signing key. The "local" profile (application-local.yml) supplies its own
+    # dev-only fallback that overrides this; every other profile (including "prod") inherits this
+    # entry as-is and will fail to start if JWT_SECRET isn't set in the environment.
+    secret: ${JWT_SECRET}
+    access-token-ttl-minutes: 15
+    refresh-token-ttl-days: 30
+  email:
+    resend-api-key: ${RESEND_API_KEY:}
+    from-address: ${EMAIL_FROM_ADDRESS:noreply@incidentroom.com}
+  email-verification:
+    code-ttl-minutes: 10
+    max-attempts: 5
+    resend-cooldown-minutes: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      show-components: when-authorized
+      # Without this, Spring Boot's default "authorized" check for when-authorized is just
+      # "is there any authenticated principal" — meaning any logged-in player (not just admins)
+      # would see the health breakdown (component names, Mongo status, etc). Restricting to
+      # ADMIN keeps this consistent with the rest of the app's admin-only operational-visibility
+      # posture (see SecurityConfig's /actuator/** rule, which also requires ROLE_ADMIN for
+      # everything except the bare health/info status). Role name has no "ROLE_" prefix here —
+      # Boot's isUserInRole() check adds it, matching how JwtAuthenticationFilter grants
+      # "ROLE_ADMIN" and how SecurityConfig's own .hasRole("ADMIN") calls are written.
+      roles: ADMIN
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+springdoc:
+  swagger-ui:
+    path: /docs
+  api-docs:
+    path: /api-docs

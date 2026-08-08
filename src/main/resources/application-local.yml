@@ -1,0 +1,17 @@
+app:
+  cookie:
+    secure: false     # allow plain HTTP on localhost; SameSite=Strict still enforced
+  jwt:
+    # local-only fallback secret so `mvn spring-boot:run` works out of the box without extra setup.
+    # NEVER rely on this outside local dev — application-prod.yml has no default and will fail fast if unset.
+    secret: ${JWT_SECRET:local-dev-only-secret-do-not-use-in-any-real-environment-change-me}
+
+logging:
+  level:
+    root: INFO
+    com.incidentroom: DEBUG
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{correlationId}] %logger{36} - %msg%n"
+
+# In local dev, email "sending" just logs the code to the console (see ConsoleEmailService)
+app-email-provider: console

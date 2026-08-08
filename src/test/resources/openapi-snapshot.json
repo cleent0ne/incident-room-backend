@@ -1,0 +1,2792 @@
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "Incident Room API",
+    "description" : "Production REST API for Incident Room â a gamified SRE/DevOps incident response learning platform. Supports anonymous play with 256-bit capability tokens, stateless JWT cookie authentication, scenario catalog filtering, interactive gameplay telemetry feeds, debrief scoring, leaderboards, and admin YAML authoring.",
+    "contact" : {
+      "name" : "Incident Room Engineering Team",
+      "url" : "http://localhost:3000"
+    },
+    "license" : {
+      "name" : "Proprietary",
+      "url" : "http://localhost:3000"
+    },
+    "version" : "1.0.0"
+  },
+  "servers" : [ {
+    "url" : "http://localhost:8080",
+    "description" : "Local Development Server"
+  }, {
+    "url" : "/",
+    "description" : "Current Server Origin"
+  } ],
+  "tags" : [ {
+    "name" : "Scenarios",
+    "description" : "Public scenario catalog, daily incident, root cause categories, and sitemap data"
+  }, {
+    "name" : "User Profile",
+    "description" : "Authenticated user account statistics and attempt history"
+  }, {
+    "name" : "Auth",
+    "description" : "Authentication, email verification, session management, and OAuth2 flow"
+  }, {
+    "name" : "Attempts",
+    "description" : "Incident gameplay loop: start attempt, investigate actions, telemetry feed, reflection, resolve, debrief, and claim"
+  }, {
+    "name" : "Admin",
+    "description" : "ROLE_ADMIN scenario YAML import, draft validation, publishing, and daily date scheduling"
+  } ],
+  "paths" : {
+    "/api/v1/auth/verify-email" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Verify email address",
+        "description" : "Verifies the 6-digit code sent by email. Sets HTTP-only auth cookies on success.",
+        "operationId" : "verifyEmail",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "401" : {
+            "description" : "Invalid or expired verification code",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation failed for email or code format",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Email verified â session established, returns user response",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/reset-password" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Reset password with code",
+        "description" : "Verifies password reset code and sets a new password. Revokes all existing sessions.",
+        "operationId" : "resetPassword",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Password reset successful",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (5 / minute / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Invalid, expired, or rate-limited reset code",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/resend-verification" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Resend verification code",
+        "description" : "Resends a new 6-digit email verification code to an unverified user account.",
+        "operationId" : "resendVerification",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResendVerificationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "202" : {
+            "description" : "Accepted â verification code sent if account needs verification",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (3 / hour / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation failed for email",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/register" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Register new account",
+        "description" : "Creates a new user account and sends a 6-digit verification code by email.",
+        "operationId" : "register",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "429" : {
+            "description" : "Rate limit exceeded (5 / hour / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation failed for email, password, or displayName",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "202" : {
+            "description" : "Accepted â verification email sent if account is available",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Silent refresh access token",
+        "description" : "Refreshes the JWT access token using the HttpOnly ir_refresh cookie. Rotates the refresh token.",
+        "operationId" : "refresh",
+        "responses" : {
+          "200" : {
+            "description" : "Access token successfully refreshed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing, expired, or revoked refresh token",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (30 / hour / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "refreshCookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/auth/logout" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Log out current session",
+        "description" : "Revokes the current refresh token and clears all authentication cookies.",
+        "operationId" : "logout",
+        "responses" : {
+          "204" : {
+            "description" : "Successfully logged out"
+          },
+          "403" : {
+            "description" : "Missing or invalid X-CSRF-Token header"
+          }
+        },
+        "security" : [ {
+          "refreshCookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/auth/logout-all" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Log out all sessions",
+        "description" : "Revokes all active refresh token sessions across all devices for the current user.",
+        "operationId" : "logoutAll",
+        "responses" : {
+          "401" : {
+            "description" : "Unauthenticated"
+          },
+          "403" : {
+            "description" : "Missing or invalid X-CSRF-Token header"
+          },
+          "204" : {
+            "description" : "All sessions revoked"
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/auth/login" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Log in with email & password",
+        "description" : "Authenticates user credentials. Sets ir_access, ir_refresh, and ir_csrf cookies on success.",
+        "operationId" : "login",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Successfully authenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (10 / minute / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Account exists but email is not verified yet",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Incorrect email or password",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/forgot-password" : {
+      "post" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Request password reset code",
+        "description" : "Generates a 6-digit password reset code and emails it if an account exists for the given address.",
+        "operationId" : "forgotPassword",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "429" : {
+            "description" : "Rate limit exceeded (3 / hour / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Reset request accepted",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attempts" : {
+      "post" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Start a new incident attempt",
+        "description" : "Creates a new attempt for a scenario. Supports both anonymous players (returns capabilityToken) and authenticated users.",
+        "operationId" : "start",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/StartAttemptRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "404" : {
+            "description" : "Scenario not found or not published",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (30 / minute / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          },
+          "201" : {
+            "description" : "Attempt created successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/attempts/{id}/resolve" : {
+      "post" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Resolve incident attempt",
+        "description" : "Commits a remediation action (REMEDIATE kind) to resolve the incident and get final debrief & score.",
+        "operationId" : "resolve",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Attempt ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Capability-Token",
+          "in" : "header",
+          "description" : "Capability token (required for anonymous attempts)",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ResolveAttemptRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "404" : {
+            "description" : "Attempt or action key not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Attempt belongs to another user",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid capability token",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (60 / minute / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Incident resolved â returns full debrief score breakdown",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid action key, not REMEDIATE kind, or attempt already resolved",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "capabilityTokenHeader" : [ ]
+        }, {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/attempts/{id}/actions" : {
+      "post" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Take investigative action",
+        "description" : "Runs a diagnostic action (INVESTIGATE kind) to reveal additional telemetry signals.",
+        "operationId" : "takeAction",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Attempt ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Capability-Token",
+          "in" : "header",
+          "description" : "Capability token (required for anonymous attempts)",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/TakeActionRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Newly revealed telemetry response",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TakeActionResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Attempt or action key not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TakeActionResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid action key or action is REMEDIATE kind",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TakeActionResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Attempt belongs to another user",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TakeActionResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid capability token",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TakeActionResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (60 / minute / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TakeActionResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "capabilityTokenHeader" : [ ]
+        }, {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/attempts/claim" : {
+      "post" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Claim anonymous attempts",
+        "description" : "Links anonymous attempts played prior to account creation to the now-authenticated user account.",
+        "operationId" : "claim",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ClaimAttemptsRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "429" : {
+            "description" : "Rate limit exceeded (5 / minute / IP)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ClaimAttemptsResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Empty token list or list size exceeds 20 max",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ClaimAttemptsResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Claim result response â count of newly linked attempts",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ClaimAttemptsResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Not authenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ClaimAttemptsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/admin/scenarios/import" : {
+      "post" : {
+        "tags" : [ "Admin" ],
+        "summary" : "Import scenario from raw YAML",
+        "description" : "Parses and persists a scenario definition from raw YAML text. Always creates or updates a draft (unpublished).",
+        "operationId" : "importScenario",
+        "requestBody" : {
+          "description" : "Raw scenario YAML content string",
+          "content" : {
+            "text/plain" : {
+              "schema" : {
+                "type" : "string"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Scenario imported as draft, returns validation warnings if any",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ImportScenarioResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Not found (if caller is not authenticated or not ROLE_ADMIN)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ImportScenarioResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "YAML syntax error or invalid structure",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ImportScenarioResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/users/me" : {
+      "delete" : {
+        "tags" : [ "User Profile" ],
+        "summary" : "Delete user account (GDPR Article 17)",
+        "description" : "Permanently deletes the authenticated user account and all linked data (attempts, refresh tokens, leaderboard entries, verification codes).",
+        "operationId" : "deleteAccount",
+        "responses" : {
+          "401" : {
+            "description" : "Unauthenticated"
+          },
+          "204" : {
+            "description" : "Account permanently deleted and cookies cleared"
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      },
+      "patch" : {
+        "tags" : [ "User Profile" ],
+        "summary" : "Update profile",
+        "description" : "Updates the authenticated user's display name.",
+        "operationId" : "updateProfile",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Updated user profile",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Unauthenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation failed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/attempts/{id}/reflection" : {
+      "patch" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Save working hypothesis / reflection",
+        "description" : "Saves the player's free-text hypothesis before committing to a remediation.",
+        "operationId" : "saveReflection",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Attempt ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Capability-Token",
+          "in" : "header",
+          "description" : "Capability token (required for anonymous attempts)",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SaveReflectionRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "401" : {
+            "description" : "Missing or invalid capability token"
+          },
+          "429" : {
+            "description" : "Rate limit exceeded (20 / minute / IP)"
+          },
+          "204" : {
+            "description" : "Reflection saved"
+          },
+          "400" : {
+            "description" : "Text exceeds 2000 characters limit"
+          }
+        },
+        "security" : [ {
+          "capabilityTokenHeader" : [ ]
+        }, {
+          "cookieAuth" : [ ]
+        }, {
+          "csrfHeader" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/admin/scenarios/{id}/publish" : {
+      "patch" : {
+        "tags" : [ "Admin" ],
+        "summary" : "Publish or unpublish scenario",
+        "description" : "Publishes or unpublishes a scenario by ID. Publishing requires scenario validation check to pass.",
+        "operationId" : "setPublished",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Scenario MongoDB ObjectId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PublishScenarioRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "400" : {
+            "description" : "Validation errors block publishing",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ImportScenarioResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Scenario ID not found or non-admin caller",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ImportScenarioResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Publish state updated successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ImportScenarioResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/admin/scenarios/{id}/daily-date" : {
+      "patch" : {
+        "tags" : [ "Admin" ],
+        "summary" : "Schedule daily incident date",
+        "description" : "Assigns a scenario to be the designated daily incident for a specific UTC date (YYYY-MM-DD).",
+        "operationId" : "setDailyDate",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Scenario MongoDB ObjectId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SetDailyDateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "204" : {
+            "description" : "Daily date assigned"
+          },
+          "404" : {
+            "description" : "Scenario ID not found or non-admin caller"
+          },
+          "400" : {
+            "description" : "Invalid date format"
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/users/me/stats" : {
+      "get" : {
+        "tags" : [ "User Profile" ],
+        "summary" : "Get user stats summary",
+        "description" : "Total completed incidents and average score across the authenticated user's full history â computed server-side via aggregation, not limited to one page of attempts.",
+        "operationId" : "myStats",
+        "responses" : {
+          "401" : {
+            "description" : "Unauthenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserStatsDto"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "User stats summary",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserStatsDto"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/users/me/export" : {
+      "get" : {
+        "tags" : [ "User Profile" ],
+        "summary" : "Export user account data (GDPR Art. 15 & 20)",
+        "description" : "Returns a complete JSON archive of the authenticated user's account profile, streak data, attempt history, and leaderboard records.",
+        "operationId" : "exportMyData",
+        "responses" : {
+          "401" : {
+            "description" : "Unauthenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserExportDataDto"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Complete user data export JSON payload",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserExportDataDto"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/users/me/attempts" : {
+      "get" : {
+        "tags" : [ "User Profile" ],
+        "summary" : "Get user attempt history",
+        "description" : "Returns a paginated history of all incident attempts played by the authenticated user.",
+        "operationId" : "myAttempts",
+        "parameters" : [ {
+          "name" : "page",
+          "in" : "query",
+          "description" : "Zero-indexed page index",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "size",
+          "in" : "query",
+          "description" : "Page size (capped at 50 max)",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 20
+          }
+        } ],
+        "responses" : {
+          "401" : {
+            "description" : "Unauthenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PagedModelAttemptSummaryDto"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Paginated list of user attempt summaries",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PagedModelAttemptSummaryDto"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/sitemap-data" : {
+      "get" : {
+        "tags" : [ "Scenarios" ],
+        "summary" : "Get sitemap data",
+        "description" : "Returns slug and last modified timestamp for all published scenarios for sitemap generation.",
+        "operationId" : "sitemapData",
+        "responses" : {
+          "200" : {
+            "description" : "List of published scenario sitemap entries",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/SitemapEntryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios" : {
+      "get" : {
+        "tags" : [ "Scenarios" ],
+        "summary" : "Browse published scenario catalog",
+        "description" : "Returns a paginated list of published incident scenarios with optional difficulty and root cause class filters.",
+        "operationId" : "list",
+        "parameters" : [ {
+          "name" : "difficulty",
+          "in" : "query",
+          "description" : "Filter by difficulty level (EASY, MEDIUM, HARD)",
+          "required" : false,
+          "schema" : {
+            "type" : "string",
+            "enum" : [ "EASY", "MEDIUM", "HARD" ]
+          }
+        }, {
+          "name" : "rootCauseClass",
+          "in" : "query",
+          "description" : "Filter by root cause class (e.g. cache_stampede)",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "page",
+          "in" : "query",
+          "description" : "Zero-indexed page index",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "size",
+          "in" : "query",
+          "description" : "Page size (capped at 50 max)",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 20
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Paginated list of scenario summaries",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PagedModelScenarioSummaryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios/{slug}" : {
+      "get" : {
+        "tags" : [ "Scenarios" ],
+        "summary" : "Get scenario details by slug",
+        "description" : "Returns public scenario details. Answer keys and gated telemetry are stripped server-side.",
+        "operationId" : "detail",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "description" : "Scenario URL slug",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Scenario not found or not published",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ScenarioDetailDto"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Scenario detail DTO",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ScenarioDetailDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios/{slug}/leaderboard" : {
+      "get" : {
+        "tags" : [ "Scenarios" ],
+        "summary" : "Get scenario leaderboard",
+        "description" : "Returns paginated high-score leaderboard entries for a specific scenario.",
+        "operationId" : "leaderboard",
+        "parameters" : [ {
+          "name" : "slug",
+          "in" : "path",
+          "description" : "Scenario URL slug",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "page",
+          "in" : "query",
+          "description" : "Zero-indexed page index",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "size",
+          "in" : "query",
+          "description" : "Page size",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 20
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Scenario not found or not published",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/LeaderboardResponseDto"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Paginated leaderboard response",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/LeaderboardResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios/root-cause-classes" : {
+      "get" : {
+        "tags" : [ "Scenarios" ],
+        "summary" : "Get distinct root cause categories",
+        "description" : "Returns all distinct root cause class strings present across all published scenarios.",
+        "operationId" : "rootCauseClasses",
+        "responses" : {
+          "200" : {
+            "description" : "List of root cause category strings",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios/daily" : {
+      "get" : {
+        "tags" : [ "Scenarios" ],
+        "summary" : "Get today's daily incident",
+        "description" : "Returns full details for the designated daily incident scheduled for today.",
+        "operationId" : "daily",
+        "responses" : {
+          "404" : {
+            "description" : "No daily scenario scheduled for today",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ScenarioDetailDto"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Daily scenario detail DTO",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ScenarioDetailDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oauth-providers" : {
+      "get" : {
+        "tags" : [ "Auth" ],
+        "summary" : "List available OAuth2 providers",
+        "description" : "Returns which OAuth2 providers (google, github) are currently configured on this deployment, so the frontend can show only working sign-in buttons instead of hardcoding provider availability separately from the backend's actual GOOGLE/GITHUB_OAUTH_* config. An empty list means only email/password sign-in is available. Initiate a flow via GET /oauth2/authorization/{provider} for any ID returned here.",
+        "operationId" : "oauthProviders",
+        "responses" : {
+          "200" : {
+            "description" : "List of configured provider IDs, e.g. [\"google\", \"github\"]",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : {
+                    "type" : "array",
+                    "items" : {
+                      "type" : "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me" : {
+      "get" : {
+        "tags" : [ "Auth" ],
+        "summary" : "Get current user profile",
+        "description" : "Returns the currently authenticated user's profile state and daily streak.",
+        "operationId" : "me",
+        "responses" : {
+          "401" : {
+            "description" : "Not authenticated / invalid session",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Current user session details",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/attempts/{id}" : {
+      "get" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Get current attempt state",
+        "description" : "Fetches current state of an in-progress attempt to hydrate the play screen after page reload.",
+        "operationId" : "getState",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Attempt ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Capability-Token",
+          "in" : "header",
+          "description" : "Capability token (required for anonymous attempts)",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Attempt state response",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Attempt not found or expired",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Attempt belongs to another user",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid capability token / auth cookie",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AttemptStateResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "capabilityTokenHeader" : [ ]
+        }, {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/attempts/{id}/result" : {
+      "get" : {
+        "tags" : [ "Attempts" ],
+        "summary" : "Get resolved attempt debrief result",
+        "description" : "Recovers the full debrief result for an already-completed attempt. Returns 409 Conflict if not yet resolved.",
+        "operationId" : "getResult",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Attempt ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Capability-Token",
+          "in" : "header",
+          "description" : "Capability token (required for anonymous attempts)",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "409" : {
+            "description" : "Attempt exists but has not been resolved yet",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Attempt not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Attempt belongs to another user",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Debrief result response",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid capability token / auth cookie",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ResolveAttemptResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "capabilityTokenHeader" : [ ]
+        }, {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/admin/scenarios" : {
+      "get" : {
+        "tags" : [ "Admin" ],
+        "summary" : "List scenarios (admin)",
+        "description" : "Paginated list of ALL scenarios â drafts and published â with an optional published filter. This is the backend-authoritative source for what scenarios exist; the admin console should treat this as ground truth rather than any client-side cache of past imports.",
+        "operationId" : "list_1",
+        "parameters" : [ {
+          "name" : "published",
+          "in" : "query",
+          "description" : "Filter to only published (true) or only draft (false) scenarios; omit for both",
+          "required" : false,
+          "schema" : {
+            "type" : "boolean"
+          }
+        }, {
+          "name" : "page",
+          "in" : "query",
+          "description" : "Zero-indexed page index",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "size",
+          "in" : "query",
+          "description" : "Page size (capped at 50 max)",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 20
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Paginated list of scenarios",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PagedModelAdminScenarioSummaryDto"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Not found (if caller is not authenticated or not ROLE_ADMIN)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PagedModelAdminScenarioSummaryDto"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/admin/scenarios/{id}" : {
+      "get" : {
+        "tags" : [ "Admin" ],
+        "summary" : "Get scenario detail (admin)",
+        "description" : "Full admin view of a scenario by ID â includes the answer key (remediation outcomes) and gated telemetry references, which the public detail endpoint strips.",
+        "operationId" : "detail_1",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Scenario MongoDB ObjectId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Full admin scenario detail",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AdminScenarioDetailDto"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Scenario ID not found, or caller is not authenticated / not ROLE_ADMIN",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AdminScenarioDetailDto"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      },
+      "delete" : {
+        "tags" : [ "Admin" ],
+        "summary" : "Delete scenario (admin)",
+        "description" : "Permanently deletes a scenario. Refuses if the scenario is currently published â unpublish it first. Historical attempts/leaderboard entries referencing a deleted scenario degrade gracefully rather than erroring.",
+        "operationId" : "delete",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "Scenario MongoDB ObjectId",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Scenario ID not found, or caller is not authenticated / not ROLE_ADMIN"
+          },
+          "409" : {
+            "description" : "Scenario is currently published â unpublish before deleting"
+          },
+          "204" : {
+            "description" : "Scenario deleted"
+          }
+        },
+        "security" : [ {
+          "cookieAuth" : [ ]
+        } ]
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "VerifyEmailRequest" : {
+        "required" : [ "code", "email" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string"
+          },
+          "code" : {
+            "pattern" : "\\d{6}",
+            "type" : "string"
+          }
+        }
+      },
+      "UserResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "displayName" : {
+            "type" : "string"
+          },
+          "emailVerified" : {
+            "type" : "boolean"
+          },
+          "role" : {
+            "type" : "string",
+            "enum" : [ "USER", "ADMIN" ]
+          },
+          "currentStreak" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "oauthProvider" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "ResetPasswordRequest" : {
+        "required" : [ "email", "newPassword", "token" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string"
+          },
+          "token" : {
+            "type" : "string"
+          },
+          "newPassword" : {
+            "maxLength" : 2147483647,
+            "minLength" : 8,
+            "type" : "string"
+          }
+        }
+      },
+      "ResendVerificationRequest" : {
+        "required" : [ "email" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string"
+          }
+        }
+      },
+      "RegisterRequest" : {
+        "required" : [ "displayName", "email", "password" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string"
+          },
+          "password" : {
+            "maxLength" : 128,
+            "minLength" : 10,
+            "type" : "string"
+          },
+          "displayName" : {
+            "maxLength" : 40,
+            "minLength" : 2,
+            "type" : "string"
+          }
+        }
+      },
+      "LoginRequest" : {
+        "required" : [ "email", "password" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string"
+          },
+          "password" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ForgotPasswordRequest" : {
+        "required" : [ "email" ],
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string"
+          }
+        }
+      },
+      "StartAttemptRequest" : {
+        "required" : [ "scenarioSlug" ],
+        "type" : "object",
+        "properties" : {
+          "scenarioSlug" : {
+            "type" : "string"
+          }
+        }
+      },
+      "AttemptStateResponse" : {
+        "type" : "object",
+        "properties" : {
+          "attemptId" : {
+            "type" : "string"
+          },
+          "scenarioSlug" : {
+            "type" : "string"
+          },
+          "scenarioTitle" : {
+            "type" : "string"
+          },
+          "symptomSummary" : {
+            "type" : "string"
+          },
+          "durationTargetSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "topology" : {
+            "$ref" : "#/components/schemas/TopologyDto"
+          },
+          "actions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ScenarioActionDto"
+            }
+          },
+          "revealedTelemetry" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/TelemetryEventDto"
+            }
+          },
+          "actionsTakenKeys" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "IN_PROGRESS", "COMPLETED", "ABANDONED" ]
+          },
+          "capabilityToken" : {
+            "type" : "string"
+          }
+        }
+      },
+      "EdgeDto" : {
+        "type" : "object",
+        "properties" : {
+          "from" : {
+            "type" : "string"
+          },
+          "to" : {
+            "type" : "string"
+          }
+        }
+      },
+      "NodeDto" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "type" : {
+            "type" : "string"
+          },
+          "label" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ScenarioActionDto" : {
+        "type" : "object",
+        "properties" : {
+          "key" : {
+            "type" : "string"
+          },
+          "kind" : {
+            "type" : "string",
+            "enum" : [ "INVESTIGATE", "REMEDIATE" ]
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "costSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "TelemetryEventDto" : {
+        "type" : "object",
+        "properties" : {
+          "t" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "type" : {
+            "type" : "string",
+            "enum" : [ "LOG", "METRIC_POINT", "TRACE_SPAN" ]
+          },
+          "source" : {
+            "type" : "string"
+          },
+          "payload" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "object"
+            }
+          }
+        }
+      },
+      "TopologyDto" : {
+        "type" : "object",
+        "properties" : {
+          "nodes" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/NodeDto"
+            }
+          },
+          "edges" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/EdgeDto"
+            }
+          }
+        }
+      },
+      "ResolveAttemptRequest" : {
+        "required" : [ "actionKey" ],
+        "type" : "object",
+        "properties" : {
+          "actionKey" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ResolveAttemptResponse" : {
+        "type" : "object",
+        "properties" : {
+          "correctness" : {
+            "type" : "string",
+            "enum" : [ "CORRECT", "PARTIALLY_CORRECT", "INCORRECT", "HARMFUL" ]
+          },
+          "scorePoints" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "timeBonus" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "finalScore" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "explanation" : {
+            "type" : "string"
+          },
+          "postmortem" : {
+            "type" : "string"
+          },
+          "elapsedSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "percentile" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "reflectionText" : {
+            "type" : "string"
+          },
+          "scenarioSlug" : {
+            "type" : "string"
+          },
+          "scenarioTitle" : {
+            "type" : "string"
+          }
+        }
+      },
+      "TakeActionRequest" : {
+        "required" : [ "actionKey" ],
+        "type" : "object",
+        "properties" : {
+          "actionKey" : {
+            "type" : "string"
+          }
+        }
+      },
+      "TakeActionResponse" : {
+        "type" : "object",
+        "properties" : {
+          "revealedTelemetry" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/TelemetryEventDto"
+            }
+          },
+          "costSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "elapsedSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "ClaimAttemptsRequest" : {
+        "required" : [ "capabilityTokens" ],
+        "type" : "object",
+        "properties" : {
+          "capabilityTokens" : {
+            "maxItems" : 20,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "ClaimAttemptsResponse" : {
+        "type" : "object",
+        "properties" : {
+          "claimedCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "skippedCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "ImportScenarioResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "slug" : {
+            "type" : "string"
+          },
+          "published" : {
+            "type" : "boolean"
+          },
+          "validationWarnings" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "UpdateProfileRequest" : {
+        "required" : [ "displayName" ],
+        "type" : "object",
+        "properties" : {
+          "displayName" : {
+            "maxLength" : 40,
+            "minLength" : 2,
+            "type" : "string"
+          }
+        }
+      },
+      "SaveReflectionRequest" : {
+        "type" : "object",
+        "properties" : {
+          "text" : {
+            "maxLength" : 2000,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "PublishScenarioRequest" : {
+        "required" : [ "publish" ],
+        "type" : "object",
+        "properties" : {
+          "publish" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "SetDailyDateRequest" : {
+        "type" : "object",
+        "properties" : {
+          "date" : {
+            "pattern" : "\\d{4}-\\d{2}-\\d{2}",
+            "type" : "string"
+          }
+        }
+      },
+      "UserStatsDto" : {
+        "type" : "object",
+        "properties" : {
+          "completedCount" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "averageScore" : {
+            "type" : "number",
+            "format" : "double"
+          }
+        }
+      },
+      "Attempt" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "scenarioId" : {
+            "type" : "string"
+          },
+          "scenarioSlug" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "capabilityToken" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "IN_PROGRESS", "COMPLETED", "ABANDONED" ]
+          },
+          "startedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "completedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "elapsedSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "actionsTaken" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/AttemptAction"
+            }
+          },
+          "chosenRemediationActionKey" : {
+            "type" : "string"
+          },
+          "finalScore" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "abandonAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "reflectionText" : {
+            "type" : "string"
+          }
+        }
+      },
+      "AttemptAction" : {
+        "type" : "object",
+        "properties" : {
+          "actionKey" : {
+            "type" : "string"
+          },
+          "sequenceNo" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "takenAtOffsetSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "LeaderboardEntry" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "scenarioSlug" : {
+            "type" : "string"
+          },
+          "scenarioId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "displayName" : {
+            "type" : "string"
+          },
+          "score" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "elapsedSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "attemptId" : {
+            "type" : "string"
+          },
+          "achievedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "UserExportDataDto" : {
+        "type" : "object",
+        "properties" : {
+          "profile" : {
+            "$ref" : "#/components/schemas/UserResponse"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastPlayedDate" : {
+            "type" : "string"
+          },
+          "stats" : {
+            "$ref" : "#/components/schemas/UserStatsDto"
+          },
+          "attempts" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/Attempt"
+            }
+          },
+          "leaderboardEntries" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/LeaderboardEntry"
+            }
+          },
+          "exportedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "AttemptSummaryDto" : {
+        "type" : "object",
+        "properties" : {
+          "attemptId" : {
+            "type" : "string"
+          },
+          "scenarioSlug" : {
+            "type" : "string"
+          },
+          "scenarioTitle" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "IN_PROGRESS", "COMPLETED", "ABANDONED" ]
+          },
+          "finalScore" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "elapsedSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "startedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "completedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "PageMetadata" : {
+        "type" : "object",
+        "properties" : {
+          "size" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "number" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "totalElements" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "totalPages" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        }
+      },
+      "PagedModelAttemptSummaryDto" : {
+        "type" : "object",
+        "properties" : {
+          "content" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/AttemptSummaryDto"
+            }
+          },
+          "page" : {
+            "$ref" : "#/components/schemas/PageMetadata"
+          }
+        }
+      },
+      "SitemapEntryDto" : {
+        "type" : "object",
+        "properties" : {
+          "slug" : {
+            "type" : "string"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "PagedModelScenarioSummaryDto" : {
+        "type" : "object",
+        "properties" : {
+          "content" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ScenarioSummaryDto"
+            }
+          },
+          "page" : {
+            "$ref" : "#/components/schemas/PageMetadata"
+          }
+        }
+      },
+      "ScenarioSummaryDto" : {
+        "type" : "object",
+        "properties" : {
+          "slug" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "difficulty" : {
+            "type" : "string",
+            "enum" : [ "EASY", "MEDIUM", "HARD" ]
+          },
+          "rootCauseClass" : {
+            "type" : "string"
+          },
+          "symptomSummary" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ScenarioDetailDto" : {
+        "type" : "object",
+        "properties" : {
+          "slug" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "difficulty" : {
+            "type" : "string",
+            "enum" : [ "EASY", "MEDIUM", "HARD" ]
+          },
+          "rootCauseClass" : {
+            "type" : "string"
+          },
+          "symptomSummary" : {
+            "type" : "string"
+          },
+          "durationTargetSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "topology" : {
+            "$ref" : "#/components/schemas/TopologyDto"
+          },
+          "actions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ScenarioActionDto"
+            }
+          },
+          "ambientTelemetry" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/TelemetryEventDto"
+            }
+          },
+          "postmortemMarkdown" : {
+            "type" : "string"
+          },
+          "seo" : {
+            "$ref" : "#/components/schemas/ScenarioSeoDto"
+          }
+        }
+      },
+      "ScenarioSeoDto" : {
+        "type" : "object",
+        "properties" : {
+          "metaTitle" : {
+            "type" : "string"
+          },
+          "metaDescription" : {
+            "type" : "string"
+          },
+          "ogImagePath" : {
+            "type" : "string"
+          }
+        }
+      },
+      "LeaderboardEntryDto" : {
+        "type" : "object",
+        "properties" : {
+          "rank" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "displayName" : {
+            "type" : "string"
+          },
+          "score" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "elapsedSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "achievedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "LeaderboardResponseDto" : {
+        "type" : "object",
+        "properties" : {
+          "scenarioSlug" : {
+            "type" : "string"
+          },
+          "entries" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/LeaderboardEntryDto"
+            }
+          },
+          "totalEntries" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "page" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "size" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "AdminScenarioSummaryDto" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "slug" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "difficulty" : {
+            "type" : "string",
+            "enum" : [ "EASY", "MEDIUM", "HARD" ]
+          },
+          "rootCauseClass" : {
+            "type" : "string"
+          },
+          "published" : {
+            "type" : "boolean"
+          },
+          "dailyDate" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "PagedModelAdminScenarioSummaryDto" : {
+        "type" : "object",
+        "properties" : {
+          "content" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/AdminScenarioSummaryDto"
+            }
+          },
+          "page" : {
+            "$ref" : "#/components/schemas/PageMetadata"
+          }
+        }
+      },
+      "AdminScenarioActionDto" : {
+        "type" : "object",
+        "properties" : {
+          "key" : {
+            "type" : "string"
+          },
+          "kind" : {
+            "type" : "string",
+            "enum" : [ "INVESTIGATE", "REMEDIATE" ]
+          },
+          "label" : {
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "costSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "outcome" : {
+            "$ref" : "#/components/schemas/OutcomeDto"
+          }
+        }
+      },
+      "AdminScenarioDetailDto" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "slug" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "difficulty" : {
+            "type" : "string",
+            "enum" : [ "EASY", "MEDIUM", "HARD" ]
+          },
+          "rootCauseClass" : {
+            "type" : "string"
+          },
+          "symptomSummary" : {
+            "type" : "string"
+          },
+          "durationTargetSeconds" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "published" : {
+            "type" : "boolean"
+          },
+          "dailyDate" : {
+            "type" : "string"
+          },
+          "topology" : {
+            "$ref" : "#/components/schemas/TopologyDto"
+          },
+          "actions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/AdminScenarioActionDto"
+            }
+          },
+          "telemetry" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/AdminTelemetryEventDto"
+            }
+          },
+          "postmortemMarkdown" : {
+            "type" : "string"
+          },
+          "seo" : {
+            "$ref" : "#/components/schemas/ScenarioSeoDto"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "AdminTelemetryEventDto" : {
+        "type" : "object",
+        "properties" : {
+          "t" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "type" : {
+            "type" : "string",
+            "enum" : [ "LOG", "METRIC_POINT", "TRACE_SPAN" ]
+          },
+          "source" : {
+            "type" : "string"
+          },
+          "revealedBy" : {
+            "type" : "string"
+          },
+          "payload" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "object"
+            }
+          }
+        }
+      },
+      "OutcomeDto" : {
+        "type" : "object",
+        "properties" : {
+          "correctness" : {
+            "type" : "string",
+            "enum" : [ "CORRECT", "PARTIALLY_CORRECT", "INCORRECT", "HARMFUL" ]
+          },
+          "scorePoints" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "explanation" : {
+            "type" : "string"
+          }
+        }
+      }
+    },
+    "securitySchemes" : {
+      "cookieAuth" : {
+        "type" : "apiKey",
+        "description" : "HttpOnly JWT Access Token cookie (15 min TTL)",
+        "name" : "ir_access",
+        "in" : "cookie"
+      },
+      "refreshCookieAuth" : {
+        "type" : "apiKey",
+        "description" : "HttpOnly Refresh Token cookie (30 days TTL, rotated on use)",
+        "name" : "ir_refresh",
+        "in" : "cookie"
+      },
+      "csrfHeader" : {
+        "type" : "apiKey",
+        "description" : "Double-submit CSRF protection header. Value read from JS-readable `ir_csrf` cookie.",
+        "name" : "X-CSRF-Token",
+        "in" : "header"
+      },
+      "capabilityTokenHeader" : {
+        "type" : "apiKey",
+        "description" : "Opaque 256-bit bearer token for anonymous attempts (passed in header)",
+        "name" : "X-Capability-Token",
+        "in" : "header"
+      }
+    }
+  }
+}
