@@ -1,16 +1,8 @@
-[phases.setup]
-nixPkgs = ["jdk21"]
-
 [build]
-builder = "NIXPACKS"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-# Railway won't route traffic to a new deployment, and won't consider a rolling deploy
-# successful, until this path returns 200. Since /actuator/health's status genuinely
-# reflects Mongo connectivity (see MongoHealthIndicatorTest and
-# ActuatorHealthIntegrationTest), this is what gives zero-downtime deploys real teeth —
-# a deploy that comes up but can't reach Atlas will be correctly held back instead of
-# receiving traffic.
 healthcheckPath = "/actuator/health"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
