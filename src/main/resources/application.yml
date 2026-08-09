@@ -2,10 +2,10 @@ spring:
   application:
     name: incident-room-backend
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:local}
+    active: ${SPRING_PROFILES_ACTIVE}
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/incidentroom}
+      uri: ${MONGODB_URI}
       auto-index-creation: true
 
 server:
@@ -15,10 +15,10 @@ server:
     include-stacktrace: never
 
 app:
-  frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  frontend-base-url: ${FRONTEND_BASE_URL}
   cookie:
-    domain: ${COOKIE_DOMAIN:localhost}
-    secure: ${COOKIE_SECURE:true}     # true in prod (HTTPS-only); overridden in application-prod.yml
+    domain: ${COOKIE_DOMAIN}
+    secure: ${COOKIE_SECURE}     # true in prod (HTTPS-only); overridden in application-prod.yml
   jwt:
     # Deliberately NO default here — a missing JWT_SECRET must fail startup rather than boot with
     # a weak/shared signing key. The "local" profile (application-local.yml) supplies its own
@@ -28,7 +28,7 @@ app:
     access-token-ttl-minutes: 15
     refresh-token-ttl-days: 30
   email:
-    resend-api-key: ${RESEND_API_KEY:}
+    resend-api-key: ${RESEND_API_KEY}
     from-address: ${EMAIL_FROM_ADDRESS:noreply@incidentroom.com}
   email-verification:
     code-ttl-minutes: 10
