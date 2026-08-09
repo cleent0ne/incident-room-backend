@@ -13,4 +13,8 @@ public interface AppUserRepository extends MongoRepository<AppUser, String> {
     boolean existsByEmail(String email);
 
     Optional<AppUser> findByOauthProviderAndOauthProviderId(String oauthProvider, String oauthProviderId);
+
+    Optional<AppUser> findByGoogleId(String googleId);
+
+    Optional<AppUser> findByGithubId(String githubId);
 }

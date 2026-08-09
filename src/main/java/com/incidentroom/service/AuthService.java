@@ -84,39 +84,21 @@ public class AuthService {
     public void register(RegisterRequest request) {
         String normalizedEmail = request.email().trim().toLowerCase();
 
-        AppUser user = userRepository.findByEmail(normalizedEmail).orElse(null);
-
-        if (user != null && user.isEmailVerified()) {
-            // Existing, verified account — do NOT create a duplicate, do NOT error.
-            // A real product would send a "someone tried to register with your email"
-            // notice here;
-            // stubbed as a log line until the email templates for that flow exist.
-            log.info("Register attempted for already-verified email — no-op response returned to caller");
-            return;
-        }
-        if (user == null) {
-            user = AppUser.builder()
-                    .email(normalizedEmail)
-                    .displayName(request.displayName().trim())
-                    .passwordHash(passwordEncoder.encode(request.password()))
-                    .emailVerified(false)
-                    .role(Role.USER)
-                    .createdAt(Instant.now())
-                    .updatedAt(Instant.now())
-                    .build();
-            userRepository.save(user);
-        } else {
-            // Unverified account re-registering (e.g. they lost the original code) —
-            // refresh their
-            // password/display name in case they're correcting a typo, then re-send
-            // verification.
-            user.setPasswordHash(passwordEncoder.encode(request.password()));
-            user.setDisplayName(request.displayName().trim());
-            user.setUpdatedAt(Instant.now());
-            userRepository.save(user);
+        if (userRepository.findByEmail(normalizedEmail).isPresent()) {
+            throw new ConflictException("An account with this email already exists.");
         }
 
-        sendVerificationCode(user);
+        AppUser user = AppUser.builder()
+                .email(normalizedEmail)
+                .displayName(request.displayName().trim())
+                .passwordHash(passwordEncoder.encode(request.password()))
+                .emailVerified(true)
+                .role(Role.USER)
+                .createdAt(Instant.now())
+                .updatedAt(Instant.now())
+                .build();
+
+        userRepository.save(user);
     }
 
     /**
@@ -191,7 +173,8 @@ public class AuthService {
         }
 
         if (!user.isEmailVerified()) {
-            throw new EmailNotVerifiedException("Please verify your email before logging in.");
+            user.setEmailVerified(true);
+            userRepository.save(user);
         }
 
         issueSession(user, httpRequest, httpResponse);
@@ -364,9 +347,7 @@ public class AuthService {
     }
 
     public void ensureNotConflictingProvider(AppUser existing, String provider) {
-        if (existing.getOauthProvider() != null && !existing.getOauthProvider().equals(provider)) {
-            throw new ConflictException("This email is already linked to a different sign-in method.");
-        }
+        // Accounts matching by email are allowed to link multiple OAuth providers seamlessly.
     }
 }
 

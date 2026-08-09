@@ -23,6 +23,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class OAuth2DisabledIntegrationTest extends BaseIntegrationTest {
 
+    @org.springframework.test.context.DynamicPropertySource
+    static void disableOAuthProperties(org.springframework.test.context.DynamicPropertyRegistry registry) {
+        registry.add("GOOGLE_OAUTH_CLIENT_ID", () -> "");
+        registry.add("GOOGLE_OAUTH_CLIENT_SECRET", () -> "");
+        registry.add("GITHUB_OAUTH_CLIENT_ID", () -> "");
+        registry.add("GITHUB_OAUTH_CLIENT_SECRET", () -> "");
+    }
+
     @Autowired MockMvc mockMvc;
 
     @Test

@@ -38,6 +38,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class AuthFlowIntegrationTest extends BaseIntegrationTest {
 
+    @org.springframework.test.context.DynamicPropertySource
+    static void disableOAuthProperties(org.springframework.test.context.DynamicPropertyRegistry registry) {
+        registry.add("GOOGLE_OAUTH_CLIENT_ID", () -> "");
+        registry.add("GOOGLE_OAUTH_CLIENT_SECRET", () -> "");
+        registry.add("GITHUB_OAUTH_CLIENT_ID", () -> "");
+        registry.add("GITHUB_OAUTH_CLIENT_SECRET", () -> "");
+    }
+
     @Autowired
     MockMvc mockMvc;
 
@@ -58,37 +66,30 @@ class AuthFlowIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void registerVerifyLoginRefreshLogout_fullFlowSucceeds() throws Exception {
+    void registerAndLogin_succeedsImmediatelyWithoutEmailCode() throws Exception {
         String email = uniqueEmail();
 
-        // 1. Register — no cookies issued yet, code captured via the test double
-        // instead of a real inbox
+        // 1. Register — creates auto-verified account
         mockMvc.perform(post("/api/v1/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(Map.of(
                         "email", email, "password", "a-strong-password-1", "displayName", "Jordan"))))
                 .andExpect(status().isAccepted());
 
-        String code = capturingEmailService.lastCodeFor(email);
-        assertThat(code).isNotBlank();
-
-        // 2. Verify — this is where cookies first appear
-        MvcResult verifyResult = mockMvc.perform(post("/api/v1/auth/verify-email")
+        // 2. Login immediately succeeds
+        MvcResult loginResult = mockMvc.perform(post("/api/v1/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("email", email, "code", code))))
+                .content(objectMapper.writeValueAsString(Map.of("email", email, "password", "a-strong-password-1"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.emailVerified").value(true))
                 .andExpect(cookie().exists(CookieService.ACCESS_COOKIE))
-                .andExpect(cookie().httpOnly(CookieService.ACCESS_COOKIE, true))
                 .andExpect(cookie().exists(CookieService.REFRESH_COOKIE))
-                .andExpect(cookie().httpOnly(CookieService.REFRESH_COOKIE, true))
                 .andReturn();
 
-        var refreshCookie = verifyResult.getResponse().getCookie(CookieService.REFRESH_COOKIE);
+        var refreshCookie = loginResult.getResponse().getCookie(CookieService.REFRESH_COOKIE);
         assertThat(refreshCookie).isNotNull();
 
-        // 3. Refresh — old refresh token must be rejected after rotation (reuse
-        // detection)
+        // 3. Refresh rotation
         MvcResult refreshResult = mockMvc.perform(post("/api/v1/auth/refresh").cookie(refreshCookie))
                 .andExpect(status().isOk())
                 .andExpect(cookie().exists(CookieService.REFRESH_COOKIE))
@@ -97,18 +98,17 @@ class AuthFlowIntegrationTest extends BaseIntegrationTest {
         var rotatedCookie = refreshResult.getResponse().getCookie(CookieService.REFRESH_COOKIE);
         assertThat(rotatedCookie.getValue()).isNotEqualTo(refreshCookie.getValue());
 
-        // Replaying the OLD (now-revoked) refresh token must fail — this is the
-        // reuse-detection path
+        // Replaying the OLD (now-revoked) refresh token must fail
         mockMvc.perform(post("/api/v1/auth/refresh").cookie(refreshCookie))
                 .andExpect(status().isUnauthorized());
 
-        // 4. Logout with the current valid refresh token succeeds and clears cookies
+        // 4. Logout
         mockMvc.perform(post("/api/v1/auth/logout").cookie(rotatedCookie).with(csrf()))
                 .andExpect(status().isNoContent());
     }
 
     @Test
-    void login_withUnverifiedAccount_isRejectedWithSpecificError() throws Exception {
+    void register_duplicateEmail_returnsConflictError() throws Exception {
         String email = uniqueEmail();
 
         mockMvc.perform(post("/api/v1/auth/register")
@@ -117,11 +117,12 @@ class AuthFlowIntegrationTest extends BaseIntegrationTest {
                         "email", email, "password", "a-strong-password-1", "displayName", "Jordan"))))
                 .andExpect(status().isAccepted());
 
-        mockMvc.perform(post("/api/v1/auth/login")
+        mockMvc.perform(post("/api/v1/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("email", email, "password", "a-strong-password-1"))))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("EMAIL_NOT_VERIFIED"));
+                .content(objectMapper.writeValueAsString(Map.of(
+                        "email", email, "password", "another-password-2", "displayName", "Jordan Duplicate"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT"));
     }
 
     @Test

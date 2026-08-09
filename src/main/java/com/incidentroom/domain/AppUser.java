@@ -50,6 +50,14 @@ public class AppUser {
     @Field(write = Field.Write.NON_NULL)
     private String oauthProviderId;
 
+    /** Google OAuth subject/user ID if linked. */
+    @Field(write = Field.Write.NON_NULL)
+    private String googleId;
+
+    /** GitHub OAuth user ID if linked. */
+    @Field(write = Field.Write.NON_NULL)
+    private String githubId;
+
     @Builder.Default
     private Role role = Role.USER;
 

@@ -65,36 +65,54 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
             throw new OAuth2AuthenticationException("OAuth account email is not verified by " + provider + ".");
         }
 
-        Optional<AppUser> byProviderIdentity = authService.userRepository()
-                .findByOauthProviderAndOauthProviderId(provider, profile.providerId());
+        Optional<AppUser> byProviderIdentity = Optional.empty();
+        if ("google".equals(provider)) {
+            byProviderIdentity = authService.userRepository().findByGoogleId(profile.providerId());
+        } else if ("github".equals(provider)) {
+            byProviderIdentity = authService.userRepository().findByGithubId(profile.providerId());
+        }
+        if (byProviderIdentity.isEmpty()) {
+            byProviderIdentity = authService.userRepository()
+                    .findByOauthProviderAndOauthProviderId(provider, profile.providerId());
+        }
         if (byProviderIdentity.isPresent()) {
             return byProviderIdentity.get();
         }
 
-        Optional<AppUser> byEmail = authService.userRepository().findByEmail(profile.email());
+        Optional<AppUser> byEmail = authService.userRepository().findByEmail(profile.email().trim().toLowerCase());
         if (byEmail.isPresent()) {
-            // Link to the existing account rather than creating a duplicate — the critical branch
-            // most half-built OAuth integrations get wrong.
             AppUser existing = byEmail.get();
-            authService.ensureNotConflictingProvider(existing, provider);
-            existing.setOauthProvider(provider);
-            existing.setOauthProviderId(profile.providerId());
-            existing.setEmailVerified(true); // provider-verified email supersedes our own verification requirement
+            if ("google".equals(provider)) {
+                existing.setGoogleId(profile.providerId());
+            } else if ("github".equals(provider)) {
+                existing.setGithubId(profile.providerId());
+            }
+            if (existing.getOauthProvider() == null) {
+                existing.setOauthProvider(provider);
+                existing.setOauthProviderId(profile.providerId());
+            }
+            existing.setEmailVerified(true);
             existing.setUpdatedAt(Instant.now());
             return authService.userRepository().save(existing);
         }
 
-        AppUser created = AppUser.builder()
-                .email(profile.email())
+        AppUser.AppUserBuilder builder = AppUser.builder()
+                .email(profile.email().trim().toLowerCase())
                 .displayName(profile.displayName())
                 .emailVerified(true)
                 .oauthProvider(provider)
                 .oauthProviderId(profile.providerId())
                 .role(Role.USER)
                 .createdAt(Instant.now())
-                .updatedAt(Instant.now())
-                .build();
-        return authService.userRepository().save(created);
+                .updatedAt(Instant.now());
+
+        if ("google".equals(provider)) {
+            builder.googleId(profile.providerId());
+        } else if ("github".equals(provider)) {
+            builder.githubId(profile.providerId());
+        }
+
+        return authService.userRepository().save(builder.build());
     }
 
     private record ProviderProfile(String providerId, String email, String displayName, boolean emailVerified) {}
