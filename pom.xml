@@ -38,6 +38,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-mongodb</artifactId>
         </dependency>
+        <!-- Gmail SMTP delivery — auto-configures JavaMailSender from the spring.mail.* properties
+             in application-prod.yml. See GmailSmtpEmailService. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
 
         <!-- Security & OAuth2 -->
         <dependency>

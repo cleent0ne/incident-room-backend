@@ -40,4 +40,25 @@ logging:
 
 # Fail-fast intent: app.jwt.secret has no default here. If JWT_SECRET is not set in the environment,
 # property placeholder resolution fails at startup rather than silently booting with a weak/shared secret.
-app-email-provider: transactional
+app-email-provider: gmail-smtp
+
+# Gmail SMTP — see GmailSmtpEmailService. Requires a Gmail account with 2-Step Verification
+# enabled and an App Password generated for it (myaccount.google.com/apppasswords); a normal
+# account password will be rejected by Google's SMTP relay. Both env vars are required — no
+# default here, same fail-fast intent as app.jwt.secret above, since a misconfigured mail sender
+# should surface at startup rather than as a mysterious 500 the first time someone registers.
+spring:
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${GMAIL_USERNAME}
+    password: ${GMAIL_APP_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000

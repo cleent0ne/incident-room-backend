@@ -102,13 +102,14 @@ public class AuthService {
                 .displayName(displayName)
                 .displayNameNormalized(normalizedDisplayName)
                 .passwordHash(passwordEncoder.encode(request.password()))
-                .emailVerified(true)
+                .emailVerified(false)
                 .role(Role.USER)
                 .createdAt(Instant.now())
                 .updatedAt(Instant.now())
                 .build();
 
         userRepository.save(user);
+        sendVerificationCode(user);
     }
 
     /**
@@ -195,8 +196,13 @@ public class AuthService {
         }
 
         if (!user.isEmailVerified()) {
-            user.setEmailVerified(true);
-            userRepository.save(user);
+            // Restored real enforcement — this used to auto-verify on first login, which
+            // silently defeated the entire point of the verification flow (nothing ever actually
+            // blocked an unverified account). EmailNotVerifiedException already maps to
+            // 403 EMAIL_NOT_VERIFIED (see GlobalExceptionHandler), which the frontend's login
+            // page already handles by redirecting to /verify-email — this was already wired on
+            // the client side, it just wasn't being triggered.
+            throw new EmailNotVerifiedException("Please verify your email before logging in.");
         }
 
         issueSession(user, httpRequest, httpResponse);

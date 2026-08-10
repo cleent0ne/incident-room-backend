@@ -18,12 +18,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Production EmailService — sends the verification code through Resend's HTTP API directly (a
- * plain java.net.http call rather than pulling in Resend's Java SDK, since the whole integration
- * is one POST with a JSON body; not worth a new dependency for that). This is the implementation
- * ConsoleEmailService's javadoc pointed at: registered only for the "prod" profile, so the "prod"
- * profile can now actually start (see EmailService's javadoc — every profile needs exactly one
- * implementation on the classpath, and until this class existed "prod" had none).
+ * Alternative production EmailService — sends the verification code through Resend's HTTP API
+ * directly (a plain java.net.http call rather than pulling in Resend's Java SDK, since the whole
+ * integration is one POST with a JSON body; not worth a new dependency for that).
+ *
+ * Currently dormant: GmailSmtpEmailService is the active "prod" implementation (Gmail SMTP,
+ * chosen for zero-domain-required MVP use). Only one EmailService bean can be active per profile,
+ * so this is registered under its own "resend" profile instead — activate it (e.g.
+ * `SPRING_PROFILES_ACTIVE=prod,resend` and set RESEND_API_KEY) if/when Gmail's ~500/day cap or
+ * spam-landing risk becomes a real constraint and you want a dedicated transactional-email
+ * provider instead.
  *
  * A send failure (network error, non-2xx from Resend) is deliberately NOT swallowed — it propagates
  * as an unchecked exception, which GlobalExceptionHandler turns into a 500. Registration/resend
@@ -31,7 +35,7 @@ import java.util.Map;
  * able to retry, rather than a 202 that lied about it.
  */
 @Service
-@Profile("prod")
+@Profile("resend")
 public class ResendEmailService implements EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(ResendEmailService.class);
@@ -157,4 +161,4 @@ public class ResendEmailService implements EmailService {
     private String escapeHtml(String value) {
         return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
-}
+}
