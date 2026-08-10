@@ -15,8 +15,17 @@ public interface AttemptRepository extends MongoRepository<Attempt, String> {
 
     Page<Attempt> findByUserIdOrderByStartedAtDesc(String userId, Pageable pageable);
 
-    java.util.Optional<Attempt> findFirstByUserIdAndScenarioSlugAndStatusOrderByStartedAtDesc(
-            String userId, String scenarioSlug, com.incidentroom.domain.AttemptStatus status);
+    /**
+     * Used by AttemptService.start() to enforce "one Attempt per (userId, scenario) ever" —
+     * status-agnostic on purpose, so it finds a prior attempt regardless of whether it's
+     * IN_PROGRESS, COMPLETED, or ABANDONED, and start() resets that same document for a retry
+     * instead of inserting a new one. findFirst+OrderByStartedAtDesc rather than a bare
+     * findBy... in case any pre-existing data has more than one row for the pair (there's no DB-
+     * level uniqueness constraint here, only this application-level invariant going forward) —
+     * this deterministically picks the most recent one rather than an arbitrary match.
+     */
+    java.util.Optional<Attempt> findFirstByUserIdAndScenarioSlugOrderByStartedAtDesc(
+            String userId, String scenarioSlug);
 
     java.util.List<Attempt> findByUserId(String userId);
 

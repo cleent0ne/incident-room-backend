@@ -7,6 +7,7 @@ import com.incidentroom.domain.ActionKind;
 import com.incidentroom.domain.Attempt;
 import com.incidentroom.domain.AttemptAction;
 import com.incidentroom.domain.AttemptStatus;
+import com.incidentroom.domain.Correctness;
 import com.incidentroom.domain.Outcome;
 import com.incidentroom.domain.Scenario;
 import com.incidentroom.dto.AttemptStateResponse;
@@ -68,25 +69,69 @@ public class AttemptService {
         this.mongoTemplate = mongoTemplate;
     }
 
+    /**
+     * Enforces "one Attempt per (userId, scenario), ever" for authenticated users:
+     * a prior
+     * attempt for this scenario — whatever its status — is reset in place for the
+     * new run
+     * rather than a fresh document being inserted. This is deliberately
+     * status-agnostic (not
+     * just "resume if IN_PROGRESS", which was the old behavior): a COMPLETED
+     * attempt being
+     * retried now overwrites that same row instead of leaving the old completed row
+     * behind and
+     * accumulating a new one, which is what a player replaying a scenario actually
+     * wants — the
+     * leaderboard/profile history reflects their current best/latest attempt at
+     * each scenario,
+     * not a growing pile of one row per playthrough.
+     *
+     * Anonymous play (currentUserIdOrNull == null) is unaffected — each anonymous
+     * session still
+     * gets its own Attempt/capabilityToken pair, since there's no durable identity
+     * to dedupe
+     * against until the player authenticates and claims it.
+     */
     public AttemptStateResponse start(String scenarioSlug, String currentUserIdOrNull) {
         Scenario scenario = scenarioService.getPublishedBySlug(scenarioSlug); // 404s for draft/nonexistent, same as the
                                                                               // public read API
 
         if (currentUserIdOrNull != null) {
             Optional<Attempt> existing = attemptRepository
-                    .findFirstByUserIdAndScenarioSlugAndStatusOrderByStartedAtDesc(
-                            currentUserIdOrNull, scenarioSlug, AttemptStatus.IN_PROGRESS);
+                    .findFirstByUserIdAndScenarioSlugOrderByStartedAtDesc(currentUserIdOrNull, scenarioSlug);
             if (existing.isPresent()) {
-                Attempt inProgress = existing.get();
-                if (inProgress.getAbandonAt() != null && Instant.now().isAfter(inProgress.getAbandonAt())) {
-                    inProgress.setStatus(AttemptStatus.ABANDONED);
-                    attemptRepository.save(inProgress);
-                } else {
-                    return AttemptStateResponse.of(inProgress, scenario);
+                Attempt attempt = existing.get();
+                boolean liveInProgress = attempt.getStatus() == AttemptStatus.IN_PROGRESS
+                        && (attempt.getAbandonAt() == null || !Instant.now().isAfter(attempt.getAbandonAt()));
+                if (liveInProgress) {
+                    return AttemptStateResponse.of(attempt, scenario); // resume as before
                 }
+                // COMPLETED, ABANDONED, or an expired-but-not-yet-TTL-reaped IN_PROGRESS
+                // attempt —
+                // reset this same document into a fresh run rather than inserting a new one.
+                return resetForRetry(attempt, scenario);
             }
         }
 
+        return createNewAttempt(scenario, currentUserIdOrNull);
+    }
+
+    private AttemptStateResponse resetForRetry(Attempt attempt, Scenario scenario) {
+        Instant now = Instant.now();
+        attempt.setStatus(AttemptStatus.IN_PROGRESS);
+        attempt.setStartedAt(now);
+        attempt.setCompletedAt(null);
+        attempt.setElapsedSeconds(null);
+        attempt.setActionsTaken(new java.util.ArrayList<>());
+        attempt.setChosenRemediationActionKey(null);
+        attempt.setFinalScore(null);
+        attempt.setReflectionText(null);
+        attempt.setAbandonAt(now.plus(ABANDON_AFTER_HOURS, ChronoUnit.HOURS));
+        Attempt saved = attemptRepository.save(attempt);
+        return AttemptStateResponse.of(saved, scenario);
+    }
+
+    private AttemptStateResponse createNewAttempt(Scenario scenario, String currentUserIdOrNull) {
         Instant now = Instant.now();
         Attempt attempt = Attempt.builder()
                 .scenarioId(scenario.getId())
@@ -172,8 +217,17 @@ public class AttemptService {
         }
 
         int elapsedSeconds = computeElapsedSeconds(attempt, scenario);
-        int timeBonus = computeTimeBonus(elapsedSeconds, scenario.getDurationTargetSeconds());
-        int finalScore = Math.max(0, outcome.getScorePoints() + timeBonus);
+        int timeBonus = computeTimeBonus(elapsedSeconds, scenario.getDurationTargetSeconds(), outcome.getCorrectness());
+        // No longer floored at 0 — a HARMFUL outcome (negative scorePoints) making the
+        // incident
+        // actively worse should show as a genuinely negative score, not tie with a
+        // merely-wrong
+        // INCORRECT (0 points) at the same floor. This also means the leaderboard's
+        // normal
+        // descending-score sort ranks harmful attempts below incorrect ones
+        // automatically, with
+        // no separate tiebreak logic needed in LeaderboardService.
+        int finalScore = outcome.getScorePoints() + timeBonus;
 
         attempt.setStatus(AttemptStatus.COMPLETED);
         attempt.setCompletedAt(Instant.now());
@@ -185,7 +239,8 @@ public class AttemptService {
         attemptRepository.save(attempt);
 
         if (attempt.getUserId() != null) {
-            // Single lookup reused for both the streak update and the leaderboard displayName —
+            // Single lookup reused for both the streak update and the leaderboard
+            // displayName —
             // this used to be two separate findById round trips for the same user document.
             Optional<AppUser> maybeUser = userRepository.findById(attempt.getUserId());
 
@@ -354,19 +409,24 @@ public class AttemptService {
     }
 
     /**
-     * Runs the completed-count/average-score aggregation directly via MongoTemplate rather than
-     * a derived AttemptRepository.@Aggregation method — see the note on AttemptRepository for why
-     * the interface-proxy binding for this exact "$group: { _id: null, ... }" shape isn't
-     * reliable. getUniqueMappedResult() is null both when zero documents matched (empty pipeline
-     * output) and is the correct, documented way to unwrap a single-group aggregation result.
+     * Runs the completed-count/average-score aggregation directly via MongoTemplate
+     * rather than
+     * a derived AttemptRepository.@Aggregation method — see the note on
+     * AttemptRepository for why
+     * the interface-proxy binding for this exact "$group: { _id: null, ... }" shape
+     * isn't
+     * reliable. getUniqueMappedResult() is null both when zero documents matched
+     * (empty pipeline
+     * output) and is the correct, documented way to unwrap a single-group
+     * aggregation result.
      */
     public UserStatsDto getStatsForUser(String userId) {
         Aggregation aggregation = Aggregation.newAggregation(
                 Aggregation.match(Criteria.where("userId").is(userId).and("status").is(AttemptStatus.COMPLETED)),
                 Aggregation.group().avg("finalScore").as("averageScore").count().as("completedCount"));
 
-        AggregationResults<AttemptStatsProjection> results =
-                mongoTemplate.aggregate(aggregation, "attempts", AttemptStatsProjection.class);
+        AggregationResults<AttemptStatsProjection> results = mongoTemplate.aggregate(aggregation, "attempts",
+                AttemptStatsProjection.class);
         AttemptStatsProjection projection = results.getUniqueMappedResult();
 
         return projection == null ? UserStatsDto.empty() : UserStatsDto.from(projection);
@@ -379,7 +439,7 @@ public class AttemptService {
                         "Attempt references a remediation action no longer present on its scenario"));
         Outcome outcome = remediation.getOutcome();
         int elapsedSeconds = attempt.getElapsedSeconds() == null ? 0 : attempt.getElapsedSeconds();
-        int timeBonus = computeTimeBonus(elapsedSeconds, scenario.getDurationTargetSeconds());
+        int timeBonus = computeTimeBonus(elapsedSeconds, scenario.getDurationTargetSeconds(), outcome.getCorrectness());
 
         return new ResolveAttemptResponse(
                 outcome.getCorrectness(),
@@ -398,14 +458,38 @@ public class AttemptService {
     private int computeElapsedSeconds(Attempt attempt, Scenario scenario) {
         Map<String, Integer> costByKey = new HashMap<>();
         if (scenario.getActions() != null) {
-            scenario.getActions().forEach(a -> costByKey.put(a.getKey(), a.getCostSeconds() == null ? 0 : a.getCostSeconds()));
+            scenario.getActions()
+                    .forEach(a -> costByKey.put(a.getKey(), a.getCostSeconds() == null ? 0 : a.getCostSeconds()));
         }
         return attempt.getActionsTaken().stream()
                 .mapToInt(a -> costByKey.getOrDefault(a.getActionKey(), 0))
                 .sum();
     }
 
-    private int computeTimeBonus(int elapsedSeconds, int durationTargetSeconds) {
+    /**
+     * The bonus only rewards speed on a genuinely good outcome. Gating it on
+     * correctness
+     * (rather than applying it unconditionally, as this used to) matters because
+     * elapsedSeconds
+     * only counts time spent on INVESTIGATE actions — a player who skips
+     * investigation entirely
+     * gets elapsed=0, i.e. the full bonus, regardless of what they picked. Applied
+     * unconditionally,
+     * that let a fast INCORRECT or HARMFUL pick outscore a slower but better one
+     * whenever the two
+     * outcomes' raw scorePoints differed by less than TIME_BONUS_MAX_POINTS — e.g.
+     * a rushed,
+     * uninvestigated harmful guess beating a careful-but-wrong diagnosis.
+     * Restricting the bonus to
+     * CORRECT/PARTIALLY_CORRECT preserves "diagnosing faster earns more" for
+     * legitimate answers
+     * while removing the incentive to blind-guess a remediation just to bank the
+     * speed bonus.
+     */
+    private int computeTimeBonus(int elapsedSeconds, int durationTargetSeconds, Correctness correctness) {
+        if (correctness != Correctness.CORRECT && correctness != Correctness.PARTIALLY_CORRECT) {
+            return 0;
+        }
         if (durationTargetSeconds <= 0 || elapsedSeconds >= durationTargetSeconds) {
             return 0;
         }
@@ -438,9 +522,12 @@ public class AttemptService {
                 throw new NotFoundException("Attempt not found");
             }
         } else {
-            // Constant-time comparison — same reasoning as VerificationCodeService/AuthService's
-            // token comparisons: a variable-time .equals() check leaks a timing signal proportional
-            // to the matching prefix length, which is the wrong property for any bearer credential,
+            // Constant-time comparison — same reasoning as
+            // VerificationCodeService/AuthService's
+            // token comparisons: a variable-time .equals() check leaks a timing signal
+            // proportional
+            // to the matching prefix length, which is the wrong property for any bearer
+            // credential,
             // even one as high-entropy as this 256-bit capability token.
             if (capabilityToken == null || !constantTimeEquals(capabilityToken, attempt.getCapabilityToken())) {
                 throw new NotFoundException("Attempt not found");

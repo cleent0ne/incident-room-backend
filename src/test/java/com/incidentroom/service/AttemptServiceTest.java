@@ -264,11 +264,13 @@ class AttemptServiceTest {
     }
 
     @Test
-    void finalScore_negativeBaseScore_isFlooredAtZero() {
-        // A 'harmful' outcome with a large negative scorePoints should not produce a negative finalScore.
+    void finalScore_harmfulOutcome_isNegativeNotFlooredAtZero() {
+        // A HARMFUL outcome's negative scorePoints is no longer floored at 0 — it should show
+        // as a genuinely negative final score, so it visibly ranks below a merely-wrong
+        // INCORRECT (0 points) outcome on the leaderboard instead of tying with it at a floor.
         Outcome harmfulOutcome = new Outcome();
         harmfulOutcome.setCorrectness(Correctness.HARMFUL);
-        harmfulOutcome.setScorePoints(-200);
+        harmfulOutcome.setScorePoints(-20);
         harmfulOutcome.setExplanation("That made it worse.");
 
         ActionDefinition remediateAction = new ActionDefinition();
@@ -287,7 +289,8 @@ class AttemptServiceTest {
         scenario.setActions(List.of(remediateAction));
         scenario.setPostmortemMarkdown("# Postmortem");
 
-        // Elapsed = 0, so timeBonus = 50, but -200 + 50 = -150, floored to 0
+        // HARMFUL never earns a time bonus (see computeTimeBonus's javadoc), so even at
+        // elapsed=0 the final score is exactly the outcome's raw -20, unmodified.
         Attempt attempt = Attempt.builder()
                 .id("att-1").scenarioId("sc-1").scenarioSlug("test-scenario").capabilityToken("test-token")
                 .status(AttemptStatus.IN_PROGRESS).startedAt(Instant.now()).build();
@@ -296,6 +299,46 @@ class AttemptServiceTest {
 
         ResolveAttemptResponse response = attemptService.resolve("att-1", "fix-it", null, "test-token");
 
+        assertThat(response.timeBonus()).isEqualTo(0);
+        assertThat(response.finalScore()).isEqualTo(-20);
+    }
+
+    @Test
+    void timeBonus_incorrectOutcome_neverEarnsBonus() {
+        // An INCORRECT outcome (0 base points) answered instantly (elapsed=0) must NOT earn the
+        // speed bonus — otherwise it could outscore a slower PARTIALLY_CORRECT/CORRECT answer
+        // whose base-score edge over it is smaller than TIME_BONUS_MAX_POINTS. See this test
+        // class's companion fix: computeTimeBonus now gates on correctness.
+        Outcome incorrectOutcome = new Outcome();
+        incorrectOutcome.setCorrectness(Correctness.INCORRECT);
+        incorrectOutcome.setScorePoints(0);
+        incorrectOutcome.setExplanation("Wrong, but harmless.");
+
+        ActionDefinition remediateAction = new ActionDefinition();
+        remediateAction.setKey("fix-it");
+        remediateAction.setKind(ActionKind.REMEDIATE);
+        remediateAction.setLabel("Wrong fix");
+        remediateAction.setCostSeconds(0);
+        remediateAction.setOutcome(incorrectOutcome);
+
+        Scenario scenario = new Scenario();
+        scenario.setId("sc-1");
+        scenario.setSlug("test-scenario");
+        scenario.setTitle("Test");
+        scenario.setDifficulty(Difficulty.EASY);
+        scenario.setDurationTargetSeconds(100);
+        scenario.setActions(List.of(remediateAction));
+        scenario.setPostmortemMarkdown("# Postmortem");
+
+        Attempt attempt = Attempt.builder()
+                .id("att-1").scenarioId("sc-1").scenarioSlug("test-scenario").capabilityToken("test-token")
+                .status(AttemptStatus.IN_PROGRESS).startedAt(Instant.now()).build();
+
+        stubRepositoryAndServices(attempt, scenario);
+
+        ResolveAttemptResponse response = attemptService.resolve("att-1", "fix-it", null, "test-token");
+
+        assertThat(response.timeBonus()).isEqualTo(0);
         assertThat(response.finalScore()).isEqualTo(0);
     }
 }
