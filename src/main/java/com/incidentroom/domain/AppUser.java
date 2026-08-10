@@ -34,6 +34,17 @@ public class AppUser {
 
     private String displayName;
 
+    /**
+     * Lowercased, trimmed copy of displayName used purely for uniqueness enforcement.
+     * displayName itself keeps the user's original casing for display (leaderboard, profile,
+     * etc.) — Mongo's default unique index is case-sensitive, so without this field "Alice"
+     * and "alice" would be treated as distinct and both allowed, defeating the point of a
+     * unique leaderboard name. Kept in sync with displayName everywhere it's set (see
+     * AuthService.register / updateDisplayName and CustomOAuth2UserService).
+     */
+    @Indexed(unique = true, sparse = true)
+    private String displayNameNormalized;
+
     /** Null for accounts that only ever authenticated via OAuth. */
     @lombok.ToString.Exclude
     private String passwordHash;

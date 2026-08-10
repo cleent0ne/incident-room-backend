@@ -96,9 +96,12 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
             return authService.userRepository().save(existing);
         }
 
+        String uniqueDisplayName = resolveUniqueDisplayName(profile.displayName());
+
         AppUser.AppUserBuilder builder = AppUser.builder()
                 .email(profile.email().trim().toLowerCase())
-                .displayName(profile.displayName())
+                .displayName(uniqueDisplayName)
+                .displayNameNormalized(uniqueDisplayName.toLowerCase())
                 .emailVerified(true)
                 .oauthProvider(provider)
                 .oauthProviderId(profile.providerId())
@@ -113,6 +116,31 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         }
 
         return authService.userRepository().save(builder.build());
+    }
+
+    /**
+     * OAuth signups don't type a display name — it comes straight from the provider's profile,
+     * so unlike self-service registration/profile-edit (AuthService, which rejects a taken name
+     * outright) we can't just throw a 409 here; there's no form for the user to correct. Instead,
+     * fall back to appending a short random numeric suffix until a free normalized name is found,
+     * mirroring how many platforms disambiguate "alice" -> "alice2837" on first OAuth login. The
+     * user can always change it afterward via PATCH /users/me (AuthService.updateDisplayName).
+     */
+    private String resolveUniqueDisplayName(String baseDisplayName) {
+        String base = baseDisplayName == null || baseDisplayName.isBlank() ? "player" : baseDisplayName.trim();
+        if (!authService.userRepository().existsByDisplayNameNormalized(base.toLowerCase())) {
+            return base;
+        }
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        for (int attempt = 0; attempt < 20; attempt++) {
+            String candidate = base + (1000 + random.nextInt(9000));
+            if (!authService.userRepository().existsByDisplayNameNormalized(candidate.toLowerCase())) {
+                return candidate;
+            }
+        }
+        // Astronomically unlikely to be reached (20 failed 4-digit suffixes on the same base
+        // name), but fall back to a fully random suffix rather than looping forever.
+        return base + java.util.UUID.randomUUID().toString().substring(0, 8);
     }
 
     private record ProviderProfile(String providerId, String email, String displayName, boolean emailVerified) {}

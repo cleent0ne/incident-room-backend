@@ -88,9 +88,19 @@ public class AuthService {
             throw new ConflictException("An account with this email already exists.");
         }
 
+        String displayName = request.displayName().trim();
+        String normalizedDisplayName = displayName.toLowerCase();
+        // Unlike the email-conflict check above, it's fine to say exactly what's wrong here —
+        // display names are public (leaderboard, profile) by design, so confirming one is taken
+        // isn't an enumeration leak the way confirming an email is.
+        if (userRepository.existsByDisplayNameNormalized(normalizedDisplayName)) {
+            throw new ConflictException("This display name is already taken.");
+        }
+
         AppUser user = AppUser.builder()
                 .email(normalizedEmail)
-                .displayName(request.displayName().trim())
+                .displayName(displayName)
+                .displayNameNormalized(normalizedDisplayName)
                 .passwordHash(passwordEncoder.encode(request.password()))
                 .emailVerified(true)
                 .role(Role.USER)
@@ -110,7 +120,19 @@ public class AuthService {
         AppUser user = userRepository.findById(userIdentifier)
                 .or(() -> userRepository.findByEmail(userIdentifier))
                 .orElseThrow(InvalidCredentialsException::new);
-        user.setDisplayName(newDisplayName);
+
+        String trimmed = newDisplayName.trim();
+        String normalized = trimmed.toLowerCase();
+        // Skip the uniqueness check entirely when the name isn't actually changing (case-only
+        // edits like "alice" -> "Alice" included) — otherwise a user re-saving their own
+        // unchanged name would collide with themselves and get a false 409.
+        if (!normalized.equals(user.getDisplayNameNormalized())
+                && userRepository.existsByDisplayNameNormalized(normalized)) {
+            throw new ConflictException("This display name is already taken.");
+        }
+
+        user.setDisplayName(trimmed);
+        user.setDisplayNameNormalized(normalized);
         user.setUpdatedAt(Instant.now());
         userRepository.save(user);
         return UserResponse.from(user);
@@ -350,4 +372,3 @@ public class AuthService {
         // Accounts matching by email are allowed to link multiple OAuth providers seamlessly.
     }
 }
-
