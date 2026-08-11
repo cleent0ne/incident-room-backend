@@ -30,6 +30,23 @@ app:
   email:
     resend-api-key: ${RESEND_API_KEY}
     from-address: ${EMAIL_FROM_ADDRESS:noreply@incidentroom.com}
+    brevo:
+      # See BrevoEmailService — the active "prod" email provider. sender-address must be a Brevo
+      # single-sender-verified address (Settings > Senders, Domains & Dedicated IPs > Senders);
+      # no domain ownership required, just a click-through confirmation email.
+      api-key: ${BREVO_API_KEY}
+      sender-address: ${BREVO_SENDER_ADDRESS}
+      sender-name: ${BREVO_SENDER_NAME:Incident Room}
+    gmail-api:
+      # See GmailApiEmailService — sends Gmail mail over HTTPS (Gmail API) instead of raw SMTP,
+      # since many hosts (e.g. Railway's Free/Trial/Hobby plans) block outbound SMTP ports.
+      # client-id/secret reuse the same Google OAuth app already used for user login
+      # (GOOGLE_OAUTH_CLIENT_ID/SECRET); refresh-token is a separate, long-lived credential
+      # obtained once out-of-band by granting the gmail.send scope to the sending account.
+      client-id: ${GOOGLE_OAUTH_CLIENT_ID}
+      client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      refresh-token: ${GMAIL_REFRESH_TOKEN}
+      sender-address: ${GMAIL_SENDER_ADDRESS}
   email-verification:
     code-ttl-minutes: 10
     max-attempts: 5

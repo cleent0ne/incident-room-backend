@@ -40,19 +40,25 @@ logging:
 
 # Fail-fast intent: app.jwt.secret has no default here. If JWT_SECRET is not set in the environment,
 # property placeholder resolution fails at startup rather than silently booting with a weak/shared secret.
-app-email-provider: gmail-smtp
+#
+# brevo: BrevoEmailService is the active "prod" implementation — sends over HTTPS (immune to
+# Railway's SMTP port block, same reasoning that led to trying the Gmail API first) via Brevo's
+# transactional email API, without needing a domain or Google's OAuth verification process.
+# See app.email.brevo.* above in application.yml for its required env vars (BREVO_API_KEY,
+# BREVO_SENDER_ADDRESS).
+app-email-provider: brevo
 
-# Gmail SMTP — see GmailSmtpEmailService. Requires a Gmail account with 2-Step Verification
-# enabled and an App Password generated for it (myaccount.google.com/apppasswords); a normal
-# account password will be rejected by Google's SMTP relay. Both env vars are required — no
-# default here, same fail-fast intent as app.jwt.secret above, since a misconfigured mail sender
-# should surface at startup rather than as a mysterious 500 the first time someone registers.
+# Gmail SMTP config — only consumed if GmailSmtpEmailService is activated instead (profile
+# "gmail-smtp", e.g. when deploying somewhere that doesn't block outbound SMTP). Harmless to leave
+# configured here even while dormant; JavaMailSender just goes unused otherwise. Requires a Gmail
+# account with 2-Step Verification enabled and an App Password (myaccount.google.com/apppasswords)
+# — a normal account password is rejected by Google's SMTP relay.
 spring:
   mail:
     host: smtp.gmail.com
     port: 587
-    username: ${GMAIL_USERNAME}
-    password: ${GMAIL_APP_PASSWORD}
+    username: ${GMAIL_USERNAME:}
+    password: ${GMAIL_APP_PASSWORD:}
     properties:
       mail:
         smtp:

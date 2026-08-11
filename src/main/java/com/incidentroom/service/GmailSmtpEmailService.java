@@ -15,25 +15,25 @@ import org.springframework.stereotype.Service;
 import java.io.UnsupportedEncodingException;
 
 /**
- * Production EmailService — sends through Gmail's SMTP relay via Spring's auto-configured
- * JavaMailSender (see spring.mail.* in application-prod.yml, and spring-boot-starter-mail in
- * pom.xml). This is the swap-in ResendEmailService's javadoc anticipated: a new provider
- * registered for the "prod" profile, with zero changes needed anywhere else — AuthService only
- * ever depends on the EmailService interface, never a specific implementation.
+ * Alternative production EmailService — sends through Gmail's SMTP relay via Spring's
+ * auto-configured JavaMailSender (see spring.mail.* in application-prod.yml, and
+ * spring-boot-starter-mail in pom.xml).
+ *
+ * Currently dormant: GmailApiEmailService is the active "prod" implementation, because this
+ * relies on raw SMTP (port 587/465), which many PaaS hosts — including Railway's Free/Trial/Hobby
+ * plans — block outbound at the network level regardless of app config. If you deploy somewhere
+ * that does allow outbound SMTP (a VM/VPS, or a paid Railway plan), this remains a simpler option
+ * than the Gmail API's OAuth dance — activate it with `SPRING_PROFILES_ACTIVE=prod,gmail-smtp`
+ * (and remove/rename the "prod" profile on GmailApiEmailService, since only one EmailService bean
+ * may be active at a time) plus GMAIL_USERNAME / GMAIL_APP_PASSWORD.
  *
  * Requires a Gmail account with 2-Step Verification turned on and an App Password generated for
- * it (Google's SMTP relay rejects a normal account password) — see GMAIL_USERNAME /
- * GMAIL_APP_PASSWORD in application-prod.yml. Gmail's relay also requires the "from" address to
- * match the authenticated account, so — unlike ResendEmailService, which took an independently
- * configurable from-address — this always sends as spring.mail.username.
- *
- * This is a good fit for an MVP/small app (Gmail's free tier caps out around 500 emails/day, and
- * sustained volume risks landing in spam) — ResendEmailService is kept in the codebase, just
- * dormant under a different profile ("resend"), as the straightforward upgrade path once either
- * of those limits actually matters.
+ * it (Google's SMTP relay rejects a normal account password). Gmail's relay also requires the
+ * "from" address to match the authenticated account, so — unlike ResendEmailService, which took
+ * an independently configurable from-address — this always sends as spring.mail.username.
  */
 @Service
-@Profile("prod")
+@Profile("gmail-smtp")
 public class GmailSmtpEmailService implements EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(GmailSmtpEmailService.class);
