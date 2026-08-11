@@ -21,22 +21,36 @@ import java.util.Map;
  * Production EmailService — sends through Brevo's transactional email HTTP API.
  *
  * Why Brevo instead of Gmail SMTP or the Gmail API:
- *  - Gmail SMTP (see GmailSmtpEmailService, dormant): raw SMTP ports are blocked outbound on
- *    Railway's Free/Trial/Hobby plans regardless of app config.
- *  - Gmail API (see GmailApiEmailService, dormant): works over HTTPS, but gmail.send is a
- *    "sensitive" OAuth scope — moving the OAuth app out of Testing mode requires Google's full
- *    verification process (branding review, domain ownership, possibly a demo video), which is
- *    disproportionate for a small app's verification/reset emails. While the app stays in
- *    Testing mode, refresh tokens expire every 7 days, which isn't viable for production.
- *  - Brevo's free tier sidesteps both problems: it's a plain HTTPS API (POST, so immune to SMTP
- *    port blocking), it lets you send AS a personal Gmail address once that address completes
- *    Brevo's lightweight single-sender verification (click a confirmation link — no domain/DNS
- *    ownership required), and — unlike Resend without a verified domain — it can send to any
- *    recipient, not just the account owner. Free tier cap is 300 emails/day, ample for an MVP.
+ * - Gmail SMTP (see GmailSmtpEmailService, dormant): raw SMTP ports are blocked
+ * outbound on
+ * Railway's Free/Trial/Hobby plans regardless of app config.
+ * - Gmail API (see GmailApiEmailService, dormant): works over HTTPS, but
+ * gmail.send is a
+ * "sensitive" OAuth scope — moving the OAuth app out of Testing mode requires
+ * Google's full
+ * verification process (branding review, domain ownership, possibly a demo
+ * video), which is
+ * disproportionate for a small app's verification/reset emails. While the app
+ * stays in
+ * Testing mode, refresh tokens expire every 7 days, which isn't viable for
+ * production.
+ * - Brevo's free tier sidesteps both problems: it's a plain HTTPS API (POST, so
+ * immune to SMTP
+ * port blocking), it lets you send AS a personal Gmail address once that
+ * address completes
+ * Brevo's lightweight single-sender verification (click a confirmation link —
+ * no domain/DNS
+ * ownership required), and — unlike Resend without a verified domain — it can
+ * send to any
+ * recipient, not just the account owner. Free tier cap is 300 emails/day, ample
+ * for an MVP.
  *
- * A send failure is deliberately NOT swallowed, matching the other EmailService implementations —
- * it propagates as an unchecked exception, which GlobalExceptionHandler turns into a 500, so a
- * failed registration/resend/forgot-password never lies to the caller with a success response.
+ * A send failure is deliberately NOT swallowed, matching the other EmailService
+ * implementations —
+ * it propagates as an unchecked exception, which GlobalExceptionHandler turns
+ * into a 500, so a
+ * failed registration/resend/forgot-password never lies to the caller with a
+ * success response.
  */
 @Service
 @Profile("prod")
@@ -92,8 +106,10 @@ public class BrevoEmailService implements EmailService {
         try {
             payload = objectMapper.writeValueAsString(body);
         } catch (IOException e) {
-            // Only possible if the Map above somehow contains something non-serializable — it
-            // doesn't, so this is truly "should never happen," but fail loudly rather than send
+            // Only possible if the Map above somehow contains something non-serializable —
+            // it
+            // doesn't, so this is truly "should never happen," but fail loudly rather than
+            // send
             // garbage.
             throw new IllegalStateException("Failed to serialize outgoing Brevo email payload", e);
         }
@@ -111,7 +127,8 @@ public class BrevoEmailService implements EmailService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
                 // Never log the code, recipient, or response body alongside a provider error —
-                // this ends up in prod logs and Brevo's error body can echo request details back.
+                // this ends up in prod logs and Brevo's error body can echo request details
+                // back.
                 log.error("Brevo rejected an email send: status={}", response.statusCode());
                 throw new IllegalStateException(
                         "Brevo rejected the email (status " + response.statusCode() + ")");
@@ -126,11 +143,15 @@ public class BrevoEmailService implements EmailService {
     }
 
     private String renderHtml(String displayName, String code, String codeLabel, String footer) {
-        // Table-based layout + inline styles throughout — this isn't stylistic preference, it's
-        // required for email: most clients (Outlook desktop especially) strip <style> blocks and
-        // don't reliably support flexbox/grid, so anything not inlined risks rendering unstyled.
+        // Table-based layout + inline styles throughout — this isn't stylistic
+        // preference, it's
+        // required for email: most clients (Outlook desktop especially) strip <style>
+        // blocks and
+        // don't reliably support flexbox/grid, so anything not inlined risks rendering
+        // unstyled.
         String greetingName = (displayName == null || displayName.isBlank())
-                ? "there" : escapeHtml(displayName);
+                ? "there"
+                : escapeHtml(displayName);
 
         return "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
                 + "style=\"background-color:#f4f5f7;padding:32px 16px;font-family:-apple-system,"
