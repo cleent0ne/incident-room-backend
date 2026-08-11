@@ -109,7 +109,25 @@ public class AuthService {
                 .build();
 
         userRepository.save(user);
-        sendVerificationCode(user);
+        try {
+            sendVerificationCode(user);
+        } catch (RuntimeException e) {
+            // Compensating cleanup, not a DB transaction — MongoDB transactions need a replica
+            // set, which isn't assumed here, so this is a manual rollback instead. Without it, a
+            // failed send (e.g. the email provider being down or misconfigured) leaves a
+            // permanently unverifiable user record behind: the email-conflict check above would
+            // then reject every retry with "account already exists," even though the person never
+            // received a code and never got a working account. Delete both the user and the
+            // verification-code record issueNewCode() already wrote, so the same email can be
+            // registered again cleanly. The original exception still propagates so the caller
+            // sees the failure (and GlobalExceptionHandler still turns it into a 500) — this only
+            // fixes what's left behind in the DB, not whether this attempt itself succeeded.
+            log.warn("Verification email failed during registration; rolling back user {} so the email can be retried",
+                    user.getId());
+            emailVerificationRepository.deleteByUserId(user.getId());
+            userRepository.deleteById(user.getId());
+            throw e;
+        }
     }
 
     /**
