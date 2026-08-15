@@ -1,0 +1,118 @@
+slug: dns-stale-record
+title: "Traffic to a migrated service goes nowhere for some callers"
+difficulty: easy
+root_cause_class: dns-misconfiguration
+symptom_summary: "Since 10:00 UTC, roughly 30% of requests to the Payments API are timing out at connection time, while the other 70% succeed normally."
+duration_target_seconds: 300
+
+seo:
+  meta_title: "Stale DNS Record — Incident Room"
+  meta_description: "A DNS cutover incident: an old load balancer is decommissioned before every caller's cached DNS entry has had time to expire, stranding a slice of traffic."
+  og_image_path: "/og/dns-stale-record.png"
+
+topology:
+  nodes:
+    - { id: api-gateway,  type: service, label: "API Gateway" }
+    - { id: internal-dns, type: component, label: "Internal DNS" }
+    - { id: payments-api, type: service, label: "Payments API" }
+  edges:
+    - { from: api-gateway, to: internal-dns }
+    - { from: api-gateway, to: payments-api }
+
+actions:
+  investigate:
+    - key: check_error_pattern
+      label: "Check the failure pattern"
+      description: "Look at what fraction of requests are failing and how."
+      cost_seconds: 20
+    - key: check_dns_record_history
+      label: "Check DNS record change history"
+      description: "Look at recent changes to the payments-api internal DNS record."
+      cost_seconds: 40
+    - key: check_old_lb_status
+      label: "Check the status of the previous load balancer"
+      description: "Confirm whether the load balancer the old DNS record pointed to is still reachable."
+      cost_seconds: 30
+    - key: check_resolver_cache_ages
+      label: "Check DNS resolver cache ages"
+      description: "Estimate how many callers may still hold a cached, stale DNS answer."
+      cost_seconds: 60
+  remediate:
+    - key: restore_old_lb_temporarily
+      label: "Temporarily restore the old load balancer"
+      description: "Bring the decommissioned load balancer back online until the DNS record's TTL has fully expired everywhere."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The DNS record was repointed at 10:00 UTC with a 3600-second TTL, but the old load balancer was decommissioned only 5 minutes later — long before every caller's cache could have expired. Restoring it temporarily serves stragglers safely until the TTL window has fully elapsed."
+    - key: force_client_reconnect
+      label: "Restart the calling services to force fresh DNS lookups"
+      description: "Roll the deployments of services calling Payments API so they re-resolve DNS on startup."
+      correctness: partially_correct
+      score_points: 40
+      explanation: "This helps for services under your own control, but doesn't reach every resolver or cache in the path — some callers and intermediate caches are outside your control and will keep the stale answer until it naturally expires."
+    - key: scale_up_payments_api
+      label: "Add more Payments API replicas"
+      description: "Increase the replica count to handle the failing request volume."
+      correctness: incorrect
+      score_points: 0
+      explanation: "The failing requests never reach a Payments API pod at all — they fail trying to connect to an IP that no longer serves traffic. More replicas doesn't change what address callers are resolving to."
+    - key: roll_back_database
+      label: "Roll back the Payments database"
+      description: "Revert the payments database to an earlier state."
+      correctness: harmful
+      score_points: -20
+      explanation: "The database is untouched by this incident — it's a pure DNS/connectivity problem. Rolling it back risks real data loss to fix something it was never involved in."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: api-gateway
+    payload: { name: "timeout_rate_pct", value: 30.1 }
+  - t: 5
+    type: log
+    source: api-gateway
+    revealed_by: check_error_pattern
+    payload: { message: "Failing requests are connection timeouts, not application errors — the other ~70% of requests succeed normally." }
+  - t: 10
+    type: log
+    source: internal-dns
+    revealed_by: check_dns_record_history
+    payload: { message: "payments-api.internal record updated at 10:00:00 UTC to a new load balancer IP, TTL=3600s." }
+  - t: 15
+    type: log
+    source: internal-dns
+    revealed_by: check_old_lb_status
+    payload: { message: "Old load balancer was decommissioned at 10:05:00 UTC — 5 minutes after the DNS change, not after the full TTL window." }
+  - t: 20
+    type: metric_point
+    source: internal-dns
+    revealed_by: check_resolver_cache_ages
+    payload: { note: "A meaningful share of upstream resolvers and client caches still hold the pre-10:00 answer and won't re-resolve until their individual TTLs expire." }
+
+postmortem: |
+  ## What happened
+
+  At 10:00 UTC, the internal DNS record for `payments-api.internal` was updated to point
+  at a new load balancer as part of a planned migration, with a 3600-second TTL. At
+  10:05 UTC — just five minutes later — the old load balancer was decommissioned. Any
+  caller that had resolved and cached the old IP before 10:00 kept sending traffic there
+  until its own cache entry aged out, which for some resolvers could take up to the full
+  hour.
+
+  ## Why it happened
+
+  The cutover plan didn't account for the DNS TTL. Decommissioning the old load balancer
+  immediately, rather than waiting for the full TTL window (plus a safety buffer) to
+  elapse, left a gap where a meaningful slice of traffic had nowhere valid to go.
+
+  ## The fix
+
+  The old load balancer was brought back online temporarily to serve any straggling
+  traffic, and left up until the full TTL window had elapsed, at which point it was
+  decommissioned again — this time with no traffic left pointing at it.
+
+  ## Lesson
+
+  A DNS cutover isn't finished the moment the record changes — it's finished once the
+  old TTL window has fully elapsed everywhere. Decommissioning the old target early
+  reintroduces exactly the downtime the migration was trying to avoid.

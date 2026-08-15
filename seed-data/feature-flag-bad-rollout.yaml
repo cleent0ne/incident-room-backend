@@ -1,0 +1,120 @@
+slug: feature-flag-bad-rollout
+title: "A flag flip breaks checkout for one slice of users"
+difficulty: easy
+root_cause_class: feature-flag-misconfiguration
+symptom_summary: "Since 15:00 UTC, checkout error rate for users in the 'new-pricing-ui' experiment bucket has jumped to 42%, while the control group remains completely normal."
+duration_target_seconds: 300
+
+seo:
+  meta_title: "Bad Feature Flag Rollout — Incident Room"
+  meta_description: "A flag-rollout incident: increasing a feature flag's exposure percentage exposes a latent bug that was never hit at low traffic volume."
+  og_image_path: "/og/feature-flag-bad-rollout.png"
+
+topology:
+  nodes:
+    - { id: web-frontend,        type: service, label: "Web Frontend" }
+    - { id: checkout-api,        type: service, label: "Checkout API" }
+    - { id: feature-flag-service, type: service, label: "Feature Flag Service" }
+    - { id: postgres-db,         type: database, label: "Postgres (orders)" }
+  edges:
+    - { from: web-frontend, to: checkout-api }
+    - { from: checkout-api, to: feature-flag-service }
+    - { from: checkout-api, to: postgres-db }
+
+actions:
+  investigate:
+    - key: check_error_rate_by_segment
+      label: "Check error rate by user segment"
+      description: "Compare error rates between the experiment bucket and the control group."
+      cost_seconds: 30
+    - key: check_flag_change_history
+      label: "Check feature flag change history"
+      description: "Look at recent changes to flag rollout percentages."
+      cost_seconds: 30
+    - key: check_error_logs
+      label: "Read the error logs"
+      description: "Look at the actual error being thrown for affected checkouts."
+      cost_seconds: 40
+    - key: check_recent_deploys
+      label: "Check recent deploys"
+      description: "Confirm whether a code deploy happened alongside the error spike."
+      cost_seconds: 20
+  remediate:
+    - key: roll_back_flag_rollout_pct
+      label: "Reduce the flag's rollout percentage"
+      description: "Roll the new-pricing-ui flag's exposure back down to its previous, safe level."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The flag's rollout was increased from 5% to 50% at 15:00 UTC, and errors are isolated entirely to that cohort. Rolling the exposure back removes users from the buggy path immediately, with no code deploy needed."
+    - key: roll_back_deploy
+      label: "Roll back the last deploy"
+      description: "Revert checkout-api to the previous release."
+      correctness: incorrect
+      score_points: 0
+      explanation: "There was no deploy around the time errors started — the buggy code has been present and dormant behind the flag. Rolling back a deploy that didn't cause this does nothing."
+    - key: scale_up_checkout_api
+      label: "Add more Checkout API replicas"
+      description: "Increase the replica count to absorb the error volume."
+      correctness: incorrect
+      score_points: 0
+      explanation: "This isn't a capacity problem — every replica runs the same buggy code path for flagged users regardless of how many replicas exist."
+    - key: disable_feature_flag_service_entirely
+      label: "Disable the feature flag service"
+      description: "Turn off the flag service so no flags evaluate anywhere."
+      correctness: harmful
+      score_points: -20
+      explanation: "This breaks every other flag-gated feature across the product to fix one bad flag — a single targeted rollback achieves the same result without the collateral damage."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: checkout-api
+    payload: { name: "error_rate_pct_experiment_bucket", value: 42.3, name_2: "error_rate_pct_control", value_2: 0.2 }
+  - t: 5
+    type: metric_point
+    source: checkout-api
+    revealed_by: check_error_rate_by_segment
+    payload: { note: "Errors are concentrated entirely in the new-pricing-ui experiment bucket; control group is unaffected." }
+  - t: 10
+    type: log
+    source: feature-flag-service
+    revealed_by: check_flag_change_history
+    payload: { message: "Flag 'new-pricing-ui' rollout percentage changed from 5% to 50% at 15:00:00 UTC." }
+  - t: 15
+    type: log
+    source: checkout-api
+    revealed_by: check_error_logs
+    payload: { level: "ERROR", message: "NullPointerException in NewPricingCalculator.applyBundleDiscount() when a legacy discount code is combined with the new pricing path." }
+  - t: 20
+    type: log
+    source: checkout-api
+    revealed_by: check_recent_deploys
+    payload: { message: "No deploys to checkout-api in the last 5 days. The code path has existed since the last release but was rarely exercised at 5% exposure." }
+
+postmortem: |
+  ## What happened
+
+  At 15:00 UTC, the `new-pricing-ui` feature flag's rollout percentage was increased from
+  5% to 50%. Within minutes, checkout error rate for users in that experiment bucket
+  jumped to 42%, while the control group stayed completely normal.
+
+  ## Why it happened
+
+  The new pricing calculation code path has a bug that only triggers when a legacy
+  discount code is combined with the new pricing logic — a combination rare enough that
+  at 5% exposure it essentially never occurred. Raising exposure to 50% made that
+  combination common enough to surface immediately.
+
+  ## The fix
+
+  The flag's rollout percentage was reduced back to its previous safe level, removing
+  affected users from the buggy path with no deploy required. The underlying bug in the
+  discount-combination logic is being fixed and tested separately before the rollout is
+  attempted again.
+
+  ## Lesson
+
+  A feature flag changes a code path's exposure, not its correctness — a bug that never
+  showed up at low exposure can still be there, waiting for enough traffic to find it.
+  Flag rollout increases deserve the same scrutiny as a deploy, especially for logic that
+  hasn't been exercised at scale yet.

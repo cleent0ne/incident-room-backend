@@ -1,0 +1,121 @@
+slug: queue-consumer-lag-backlog
+title: "Order confirmations are arriving hours late"
+difficulty: medium
+root_cause_class: message-queue-consumer-lag
+symptom_summary: "Customers have been reporting order-confirmation emails arriving 2-3 hours after checkout instead of within a minute, and the backlog keeps growing."
+duration_target_seconds: 600
+
+seo:
+  meta_title: "Message Queue Consumer Lag — Incident Room"
+  meta_description: "A slow downstream email vendor quietly caps consumer throughput far below the arrival rate, and the backlog grows until someone notices."
+  og_image_path: "/og/queue-consumer-lag-backlog.png"
+
+topology:
+  nodes:
+    - { id: checkout-api,        type: service,   label: "Checkout API" }
+    - { id: order-events-queue,  type: component, label: "Order Events Queue" }
+    - { id: notification-worker, type: service,   label: "Notification Worker" }
+    - { id: email-provider,      type: external,  label: "Email Provider" }
+  edges:
+    - { from: checkout-api, to: order-events-queue }
+    - { from: order-events-queue, to: notification-worker }
+    - { from: notification-worker, to: email-provider }
+
+actions:
+  investigate:
+    - key: check_queue_depth_trend
+      label: "Check queue depth over time"
+      description: "Look at how the order-events queue depth has trended over the last several hours."
+      cost_seconds: 20
+    - key: check_consumer_throughput
+      label: "Check the notification worker's processing throughput"
+      description: "Look at how many messages per minute the worker is actually processing."
+      cost_seconds: 40
+    - key: check_worker_error_logs
+      label: "Check the worker's logs"
+      description: "Look at what the notification worker is doing while processing each message."
+      cost_seconds: 50
+    - key: check_worker_replica_count
+      label: "Check the current worker replica count"
+      description: "Confirm how many notification-worker replicas are currently running."
+      cost_seconds: 20
+  remediate:
+    - key: add_timeout_and_scale_workers
+      label: "Add a stricter email-provider timeout and scale up workers"
+      description: "Cap outbound calls to the email provider at a short timeout, and add more notification-worker replicas to drain the existing backlog."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. Each message is taking roughly 8x longer than normal because slow email-provider responses aren't timing out quickly, which caps per-worker throughput. A stricter timeout stops individual calls from monopolizing a worker, and more replicas drain the backlog that's already built up."
+    - key: scale_up_workers_only
+      label: "Add more notification-worker replicas"
+      description: "Increase the replica count without changing the email-provider call timeout."
+      correctness: partially_correct
+      score_points: 40
+      explanation: "This adds parallel capacity and helps drain the backlog faster, but each worker is still individually capped by the slow, untimed email-provider calls — throughput per worker stays low, and the same backlog will build again next time the vendor is slow."
+    - key: restart_notification_workers
+      label: "Restart the notification worker pods"
+      description: "Roll the notification-worker deployment to clear any stuck state."
+      correctness: incorrect
+      score_points: 0
+      explanation: "There's no stuck state to clear — the slowness is per-call latency to an external vendor, which restarted workers will hit in exactly the same way."
+    - key: disable_notification_worker_entirely
+      label: "Disable the notification worker"
+      description: "Turn off order-confirmation emails until the situation is resolved."
+      correctness: harmful
+      score_points: -20
+      explanation: "This stops confirmations from going out at all, which is worse than the current degraded-but-working state — customers were getting late emails, not no emails."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: order-events-queue
+    payload: { name: "queue_depth", value: 14200 }
+  - t: 5
+    type: metric_point
+    source: order-events-queue
+    revealed_by: check_queue_depth_trend
+    payload: { note: "Depth has climbed steadily for roughly 6 hours with no plateau — it's not draining." }
+  - t: 10
+    type: metric_point
+    source: notification-worker
+    revealed_by: check_consumer_throughput
+    payload: { name: "messages_processed_per_min", value: 40, note: "Normal throughput is ~200/min." }
+  - t: 15
+    type: log
+    source: notification-worker
+    revealed_by: check_worker_error_logs
+    payload: { message: "Each message takes ~2.4s to process on average, up from a normal ~0.3s — almost all of it spent waiting on the email provider's send API, which has no per-call timeout configured." }
+  - t: 20
+    type: metric_point
+    source: notification-worker
+    revealed_by: check_worker_replica_count
+    payload: { name: "replica_count", value: 2, note: "Unchanged from before the incident started." }
+
+postmortem: |
+  ## What happened
+
+  Order-confirmation emails, which normally arrive within a minute of checkout, started
+  arriving 2-3 hours late, with customers reporting the delay and the underlying queue
+  backlog continuing to grow rather than draining.
+
+  ## Why it happened
+
+  The email provider's send API became slow, and calls to it from the notification
+  worker had no per-call timeout configured. Each message that hit a slow vendor
+  response held a worker for roughly 8 times longer than normal, which capped overall
+  consumer throughput at a small fraction of the queue's normal arrival rate — messages
+  were arriving far faster than the two available workers could process them.
+
+  ## The fix
+
+  A strict per-call timeout was added for calls to the email provider, so a slow
+  response no longer holds a worker indefinitely, and worker replicas were temporarily
+  increased to drain the accumulated backlog.
+
+  ## Lesson
+
+  Consumer throughput is only as fast as the slowest call inside the processing loop.
+  Any outbound call a queue consumer makes to an external dependency needs its own
+  timeout — otherwise one slow vendor can quietly throttle the entire pipeline behind
+  it, and a growing backlog is often the first visible symptom of a problem that's
+  actually about per-message latency, not queue capacity.

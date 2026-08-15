@@ -1,0 +1,120 @@
+slug: third-party-payment-provider-outage
+title: "Checkout fails only for card payments, everything else is fine"
+difficulty: medium
+root_cause_class: third-party-dependency-outage
+symptom_summary: "Since 09:45 UTC, all credit-card checkout attempts are failing with timeouts, while checkout via store credit and gift cards continues to work normally."
+duration_target_seconds: 600
+
+seo:
+  meta_title: "Third-Party Payment Provider Outage — Incident Room"
+  meta_description: "An external dependency outage narrowly scoped to card payments, with a healthy backup processor sitting unused."
+  og_image_path: "/og/third-party-payment-provider-outage.png"
+
+topology:
+  nodes:
+    - { id: checkout-api,          type: service,  label: "Checkout API" }
+    - { id: payment-gateway-vendor, type: external, label: "Card Payment Vendor (primary)" }
+    - { id: payment-gateway-backup, type: external, label: "Card Payment Vendor (backup)" }
+    - { id: postgres-db,           type: database, label: "Postgres (orders)" }
+  edges:
+    - { from: checkout-api, to: payment-gateway-vendor }
+    - { from: checkout-api, to: payment-gateway-backup }
+    - { from: checkout-api, to: postgres-db }
+
+actions:
+  investigate:
+    - key: check_checkout_failure_breakdown
+      label: "Check checkout failures by payment method"
+      description: "Break down checkout failures by which payment method was used."
+      cost_seconds: 30
+    - key: check_payment_vendor_status_page
+      label: "Check the primary vendor's public status page"
+      description: "Look for any reported incident from the card payment vendor."
+      cost_seconds: 20
+    - key: check_vendor_call_latency
+      label: "Check outbound call latency to the primary vendor"
+      description: "Look at how long calls to the primary card payment vendor are taking."
+      cost_seconds: 40
+    - key: check_backup_processor_availability
+      label: "Check whether the backup payment processor is available"
+      description: "Confirm whether the already-integrated backup processor is healthy and reachable."
+      cost_seconds: 30
+  remediate:
+    - key: enable_backup_payment_processor
+      label: "Route card payments through the backup processor"
+      description: "Switch card checkout to the backup payment processor, which is already integrated but disabled by default."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The primary vendor is reporting a partial outage on card processing, and calls to it are timing out at the configured limit. The backup processor is healthy and already integrated — routing card payments there restores checkout without waiting on the primary vendor to recover."
+    - key: retry_with_longer_timeout
+      label: "Increase the timeout for calls to the primary vendor"
+      description: "Give outbound calls to the primary vendor more time before giving up."
+      correctness: incorrect
+      score_points: 0
+      explanation: "The vendor is down, not merely slow — calls are timing out because nothing is responding, not because the timeout is too tight. A longer timeout just makes users wait longer for the same failure."
+    - key: restart_checkout_api
+      label: "Restart the Checkout API pods"
+      description: "Roll the Checkout API deployment to clear any stuck state."
+      correctness: incorrect
+      score_points: 0
+      explanation: "Checkout API itself is healthy — the problem is entirely external, at the payment vendor. Restarting changes nothing about the vendor's availability."
+    - key: disable_all_payment_methods
+      label: "Disable checkout entirely"
+      description: "Take the whole checkout flow offline until the situation is resolved."
+      correctness: harmful
+      score_points: -20
+      explanation: "Store credit and gift card checkout are working fine throughout this incident — taking all of checkout offline breaks working payment methods to address a problem narrowly scoped to card payments."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: checkout-api
+    payload: { name: "card_checkout_success_rate_pct", value: 0.0, name_2: "other_checkout_success_rate_pct", value_2: 99.6 }
+  - t: 5
+    type: metric_point
+    source: checkout-api
+    revealed_by: check_checkout_failure_breakdown
+    payload: { note: "Failures are 100% isolated to card payments — store credit and gift card checkout are unaffected." }
+  - t: 10
+    type: log
+    source: payment-gateway-vendor
+    revealed_by: check_payment_vendor_status_page
+    payload: { message: "Vendor status page: 'Investigating — partial outage affecting card processing' posted at 09:42 UTC." }
+  - t: 15
+    type: metric_point
+    source: payment-gateway-vendor
+    revealed_by: check_vendor_call_latency
+    payload: { name: "p99_latency_ms", value: 30000, note: "Calls are timing out at the configured 30-second limit — not slow, just unresponsive." }
+  - t: 20
+    type: metric_point
+    source: payment-gateway-backup
+    revealed_by: check_backup_processor_availability
+    payload: { name: "health_status", value: "healthy", note: "Already integrated into checkout-api but disabled by default." }
+
+postmortem: |
+  ## What happened
+
+  Starting at 09:45 UTC, every card-payment checkout attempt began failing with a
+  timeout, while checkout via store credit and gift cards continued working normally
+  the entire time.
+
+  ## Why it happened
+
+  The primary card payment vendor experienced a partial outage affecting card
+  processing specifically, confirmed on their public status page shortly before the
+  symptom appeared. Calls from Checkout API to the vendor timed out at the configured
+  30-second limit because the vendor simply wasn't responding — nothing on our side was
+  misconfigured or unhealthy.
+
+  ## The fix
+
+  Card payments were routed to a backup payment processor that was already integrated
+  into Checkout API but disabled by default. This restored card checkout within minutes,
+  without waiting on the primary vendor's own recovery.
+
+  ## Lesson
+
+  When a failure is cleanly scoped to one payment method and every other path is
+  healthy, the fastest question to ask is whether that specific dependency has a status
+  page reporting trouble — and whether an already-built fallback exists rather than
+  waiting on someone else's outage to resolve.

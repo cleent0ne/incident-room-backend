@@ -1,0 +1,117 @@
+slug: rate-limiter-blocking-legit-traffic
+title: "Legitimate users start getting 429s out of nowhere"
+difficulty: easy
+root_cause_class: rate-limiter-misconfiguration
+symptom_summary: "Since a config deploy at 11:30 UTC, roughly 25% of requests to the public API are returning 429 Too Many Requests, even though overall traffic volume hasn't changed."
+duration_target_seconds: 300
+
+seo:
+  meta_title: "Rate Limiter Misconfiguration — Incident Room"
+  meta_description: "A config-typo incident: a per-IP rate limit accidentally dropped a zero, turning normal traffic into apparent abuse."
+  og_image_path: "/og/rate-limiter-blocking-legit-traffic.png"
+
+topology:
+  nodes:
+    - { id: api-gateway,        type: service, label: "API Gateway (rate limiter)" }
+    - { id: redis-ratelimit,    type: cache,   label: "Redis (rate limit counters)" }
+    - { id: backend-api,        type: service, label: "Backend API" }
+  edges:
+    - { from: api-gateway, to: redis-ratelimit }
+    - { from: api-gateway, to: backend-api }
+
+actions:
+  investigate:
+    - key: check_429_rate_timeline
+      label: "Check the 429 rate over time"
+      description: "Look at when the 429 responses started and how they've trended since."
+      cost_seconds: 20
+    - key: check_ratelimit_config_history
+      label: "Check rate limiter config change history"
+      description: "Look at recent changes to the rate limiter's configuration."
+      cost_seconds: 30
+    - key: check_traffic_volume
+      label: "Check overall traffic volume"
+      description: "Confirm whether total request volume has actually increased."
+      cost_seconds: 20
+    - key: check_affected_ip_distribution
+      label: "Check which IPs are getting 429s"
+      description: "Look at whether 429s are concentrated on a few IPs or spread broadly."
+      cost_seconds: 40
+  remediate:
+    - key: revert_ratelimit_config
+      label: "Revert the rate limit configuration"
+      description: "Restore the per-IP limit to its previous value."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The 11:30 UTC config deploy dropped a zero, lowering the per-IP limit from 1000/min to 100/min by mistake. Traffic volume never changed — this was a configuration error, not real abuse. Reverting it restores normal service immediately."
+    - key: whitelist_affected_ips
+      label: "Whitelist the specific IPs that reported issues"
+      description: "Add an exception for the IPs customers have complained about."
+      correctness: partially_correct
+      score_points: 40
+      explanation: "This fixes the complaints you've heard about, but 429s are spread evenly across many distinct IPs, not concentrated on a few — whitelisting one at a time leaves everyone else still broken."
+    - key: scale_up_backend_api
+      label: "Add more Backend API replicas"
+      description: "Increase the replica count to handle more traffic."
+      correctness: incorrect
+      score_points: 0
+      explanation: "The backend never even sees these requests — the gateway rejects them with a 429 before they get anywhere near it. More backend capacity changes nothing."
+    - key: disable_rate_limiting_entirely
+      label: "Disable rate limiting"
+      description: "Turn off the rate limiter across the API gateway."
+      correctness: harmful
+      score_points: -20
+      explanation: "This removes real protection against abuse and denial-of-service traffic to fix what was a one-character config typo — reverting the specific value is just as fast and doesn't leave the API exposed."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: api-gateway
+    payload: { name: "429_rate_pct", value: 25.4 }
+  - t: 5
+    type: metric_point
+    source: api-gateway
+    revealed_by: check_429_rate_timeline
+    payload: { note: "429 rate jumped from near-zero to 25% at exactly 11:30 UTC and has held steady since." }
+  - t: 10
+    type: log
+    source: api-gateway
+    revealed_by: check_ratelimit_config_history
+    payload: { message: "Config deploy at 11:30 UTC changed per_ip_limit_per_minute from 1000 to 100." }
+  - t: 15
+    type: metric_point
+    source: api-gateway
+    revealed_by: check_traffic_volume
+    payload: { name: "requests_per_minute", value: 8400, note: "Consistent with the same time yesterday — no real traffic increase." }
+  - t: 20
+    type: metric_point
+    source: api-gateway
+    revealed_by: check_affected_ip_distribution
+    payload: { note: "429s are spread across thousands of distinct IPs at roughly proportional rates, not concentrated on a small number of heavy callers." }
+
+postmortem: |
+  ## What happened
+
+  At 11:30 UTC, a routine configuration deploy to the API gateway's rate limiter went
+  out. Almost immediately, roughly a quarter of all public API requests started being
+  rejected with 429 Too Many Requests — spread broadly across normal, legitimate
+  traffic rather than any identifiable abuse pattern.
+
+  ## Why it happened
+
+  The config change intended to make an unrelated adjustment, but accidentally dropped a
+  zero from the per-IP limit — changing it from 1000 requests per minute to 100. Normal
+  users making ordinary request volumes started tripping a limit that was never meant to
+  apply to them.
+
+  ## The fix
+
+  The per-IP limit was reverted to 1000/min, restoring normal traffic immediately with
+  no deploy or restart required beyond the config revert itself.
+
+  ## Lesson
+
+  A rate limit is exactly the kind of numeric config where a single dropped digit turns
+  a normal safeguard into a broad outage. When 429s spike with no corresponding rise in
+  real traffic, checking what changed in the limiter's config is a faster path to the
+  answer than assuming a genuine traffic spike or attack.

@@ -1,0 +1,125 @@
+slug: missing-index-lock-contention
+title: "One slow query quietly locks up writes for everyone"
+difficulty: medium
+root_cause_class: missing-database-index
+symptom_summary: "Since 13:00 UTC, write latency across the Orders service has climbed from ~15ms to several seconds, and a growing number of write transactions are timing out."
+duration_target_seconds: 600
+
+seo:
+  meta_title: "Missing Index and Lock Contention — Incident Room"
+  meta_description: "A new read feature runs a full table scan under a row lock, and every write to that table gets stuck queuing behind it."
+  og_image_path: "/og/missing-index-lock-contention.png"
+
+topology:
+  nodes:
+    - { id: orders-api,  type: service,  label: "Orders API" }
+    - { id: postgres-db, type: database, label: "Postgres (orders)" }
+  edges:
+    - { from: orders-api, to: postgres-db }
+
+actions:
+  investigate:
+    - key: check_write_latency_trend
+      label: "Check write latency over time"
+      description: "Look at how write latency has trended since it started climbing."
+      cost_seconds: 20
+    - key: check_active_queries
+      label: "Check currently active queries"
+      description: "Look at what's actively running against the orders database right now."
+      cost_seconds: 50
+    - key: check_query_plan
+      label: "Check the query plan for the suspect query"
+      description: "Look at how the database is executing the long-running query."
+      cost_seconds: 70
+    - key: check_recent_deploys
+      label: "Check recent deploys"
+      description: "Look at what shipped recently that might have introduced this query."
+      cost_seconds: 30
+    - key: check_table_lock_waits
+      label: "Check what write transactions are waiting on"
+      description: "Look at what lock, if any, queued write transactions are blocked behind."
+      cost_seconds: 40
+  remediate:
+    - key: add_missing_index
+      label: "Add an index on customer_id and deploy"
+      description: "Add a database index on the orders table's customer_id column, matching how the new feature queries it."
+      correctness: correct
+      score_points: 100
+      explanation: "Correct. The new 'recent orders by customer' feature queries by customer_id with no supporting index, forcing a full table scan that holds a lock for several seconds each time. Indexing that column eliminates the scan and the lock duration with it."
+    - key: kill_long_running_query
+      label: "Kill the long-running query"
+      description: "Terminate the currently stuck query to release the lock immediately."
+      correctness: partially_correct
+      score_points: 40
+      explanation: "This clears the immediate blockage and gives write latency instant relief, but the same feature will run the same unindexed scan again on its next call and reproduce the exact same lock contention."
+    - key: scale_up_postgres
+      label: "Scale up the Postgres instance"
+      description: "Increase the database instance size to handle the load."
+      correctness: incorrect
+      score_points: 0
+      explanation: "More CPU and IO doesn't change the query plan — a full table scan under a lock takes roughly as long regardless of instance size, and writes still queue behind it."
+    - key: fail_over_database
+      label: "Fail over to the read replica"
+      description: "Promote the read replica to primary and redirect traffic."
+      correctness: harmful
+      score_points: -20
+      explanation: "The replica has the exact same missing index, so the same query would cause the same lock contention there too — this adds real replication risk while fixing nothing."
+
+telemetry:
+  - t: 0
+    type: metric_point
+    source: postgres-db
+    payload: { name: "write_p99_latency_ms", value: 4200, note: "Baseline is normally ~15ms." }
+  - t: 5
+    type: metric_point
+    source: postgres-db
+    revealed_by: check_write_latency_trend
+    payload: { note: "Latency began climbing steadily starting at 13:00 UTC and has kept getting worse since." }
+  - t: 10
+    type: log
+    source: postgres-db
+    revealed_by: check_active_queries
+    payload: { message: "Long-running query: SELECT * FROM orders WHERE customer_id = $1 ORDER BY created_at DESC — running 4.2s, part of the new 'recent orders by customer' feature." }
+  - t: 15
+    type: log
+    source: postgres-db
+    revealed_by: check_query_plan
+    payload: { message: "Query plan: Seq Scan on orders (no index on customer_id) — full table scan, acquiring a row-level lock for the scan's duration." }
+  - t: 20
+    type: log
+    source: orders-api
+    revealed_by: check_recent_deploys
+    payload: { message: "Deploy orders-api v4.6.0 (2 hours ago) added the 'recent orders by customer' endpoint." }
+  - t: 25
+    type: metric_point
+    source: postgres-db
+    revealed_by: check_table_lock_waits
+    payload: { note: "Queued write transactions are waiting on the same row lock held by the scanning query, not on each other." }
+
+postmortem: |
+  ## What happened
+
+  Starting at 13:00 UTC, write latency on the Orders service climbed from a normal
+  ~15ms to several seconds, and write transactions began timing out in growing numbers
+  as the incident continued.
+
+  ## Why it happened
+
+  A new "recent orders by customer" endpoint, deployed two hours earlier, queries the
+  orders table by `customer_id` — a column with no supporting index. Every call runs a
+  full table scan, which in this case took several seconds and held a row lock for its
+  entire duration. Write transactions to the same table queued up behind that lock,
+  which is what turned an isolated slow query into a service-wide write latency problem.
+
+  ## The fix
+
+  An index was added on `customer_id`, matching how the new feature actually queries the
+  table. The same query now completes in milliseconds using an index scan instead of a
+  full table scan, and no longer holds a lock long enough to block other writes.
+
+  ## Lesson
+
+  A single unindexed query doesn't just make itself slow — if it holds a lock while it
+  runs, it can quietly stall every other write to the same table. Any new query pattern
+  introduced by a feature deserves a check against the table's existing indexes before
+  it ships, not after write latency starts climbing in production.
